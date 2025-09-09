@@ -16,7 +16,15 @@ const postRoutes = require("./routes/postRoutes");
 const app = express();
 const profileViewsRouter = require("./routes/profileViews");
 const bugReportsRouter = require("./routes/bugReports");
-app.use(cors());
+app.use(
+  cors({
+    origin: "https://arounduapp.netlify.app", // your frontend domain
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    credentials: true,
+  })
+);
+// If needed, handle preflight requests
+app.options("*", cors());
 
 app.use(express.json());
 
