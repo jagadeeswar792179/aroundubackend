@@ -16,9 +16,22 @@ const postRoutes = require("./routes/postRoutes");
 const app = express();
 const profileViewsRouter = require("./routes/profileViews");
 const bugReportsRouter = require("./routes/bugReports");
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://arounduapp.netlify.app",
+];
+
 app.use(
   cors({
-    origin: "https://arounduapp.netlify.app", // your frontend domain
+    origin: (origin, callback) => {
+      // allow requests with no origin (like mobile apps or curl)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true,
   })
