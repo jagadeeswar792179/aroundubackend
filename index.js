@@ -16,6 +16,7 @@ const postRoutes = require("./routes/postRoutes");
 const app = express();
 const profileViewsRouter = require("./routes/profileViews");
 const bugReportsRouter = require("./routes/bugReports");
+const bookingRoutes = require("./routes/bookingRoutes");
 const allowedOrigins = [
   "http://localhost:3000",
   "https://arounduapp.netlify.app",
@@ -64,6 +65,8 @@ app.use("/api/posts", postRoutes);
 
 app.use("/api/test-users", testUserRoutes);
 // ---- REST routes
+app.use("/api", bookingRoutes);
+
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/messages", messageRoutesFactory(io)); // pass io to messages routes

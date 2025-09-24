@@ -1,3 +1,4 @@
+// controllers/authController.js
 const pool = require("../config/db");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -34,7 +35,7 @@ const registerUser = async (req, res) => {
         first_name, last_name, email, password, gender, user_type, dob,
         university, interests, course, duration, specialization
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-      RETURNING id, first_name, last_name, email`,
+      RETURNING id, first_name, last_name, email, university, course, user_type`,
       [
         firstName,
         lastName,
@@ -52,12 +53,29 @@ const registerUser = async (req, res) => {
     );
 
     const user = result.rows[0];
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "1d",
-    });
 
-    res.status(201).json({ msg: "User registered", token, user });
+    // create token with extra fields (id, university, course)
+    const token = jwt.sign(
+      { id: user.id, university: user.university, course: user.course },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    res.status(201).json({
+      msg: "User registered",
+      token,
+      user: {
+        id: user.id,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        email: user.email,
+        university: user.university,
+        course: user.course,
+        user_type: user.user_type,
+      },
+    });
   } catch (err) {
+    console.error("Register error:", err);
     res.status(500).json({ msg: "Registration failed", error: err.message });
   }
 };
@@ -76,9 +94,12 @@ const loginUser = async (req, res) => {
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ msg: "Incorrect password" });
 
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "1d",
-    });
+    // include university and course in token payload
+    const token = jwt.sign(
+      { id: user.id, university: user.university, course: user.course },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
 
     res.json({
       token,
@@ -88,9 +109,12 @@ const loginUser = async (req, res) => {
         last_name: user.last_name,
         email: user.email,
         user_type: user.user_type,
+        university: user.university,
+        course: user.course,
       },
     });
   } catch (err) {
+    console.error("Login error:", err);
     res.status(500).json({ msg: "Login failed", error: err.message });
   }
 };

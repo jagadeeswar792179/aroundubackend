@@ -101,7 +101,7 @@ const routerFactory = (io) => {
       let rows;
       if (isInitial) {
         const q = `
-          SELECT fr.id, fr.requester_id, u.first_name, u.last_name, u.avatar_url, fr.status, fr.created_at
+          SELECT fr.id, fr.requester_id, u.first_name, u.last_name, u.avatar_url,u.user_type,u.university,fr.status, fr.created_at
           FROM follow_requests fr
           JOIN users u ON u.id = fr.requester_id
           WHERE fr.target_id = $1 AND fr.status = 'pending'
@@ -115,7 +115,7 @@ const routerFactory = (io) => {
           return res.status(400).json({ error: "Invalid last_id" });
 
         const q = `
-          SELECT fr.id, fr.requester_id, u.first_name, u.last_name, u.avatar_url, fr.status, fr.created_at
+          SELECT fr.id, fr.requester_id, u.first_name, u.last_name, u.avatar_url,u.user_type, u.university,fr.status, fr.created_at
           FROM follow_requests fr
           JOIN users u ON u.id = fr.requester_id
           WHERE fr.target_id = $1
