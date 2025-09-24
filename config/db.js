@@ -1,27 +1,24 @@
-// db/pool.js
+// src/config/db.js
+// CommonJS module that exports: { query, getPool }
 const { Pool } = require("pg");
 const dns = require("dns");
 const { URL } = require("url");
 
 function preferIPv4Dns() {
-  // Prefer IPv4 when Node supports it (Node >= 17)
   try {
     if (dns.setDefaultResultOrder) dns.setDefaultResultOrder("ipv4first");
-  } catch (err) {
+  } catch (e) {
     // ignore on older Node versions
   }
 }
 
 function buildConnectionStringWithHost(originalConnStr, host) {
-  // Build a new connection string replacing the hostname with `host` (can be IPv4)
-  // Works with postgres:// or postgresql://
   const url = new URL(originalConnStr);
   url.hostname = host;
-  // Ensure we preserve encoded username/password and other parts
   return url.toString();
 }
 
-async function resolveIPv4(hostname) {
+function resolveIPv4(hostname) {
   return new Promise((resolve, reject) => {
     dns.lookup(hostname, { family: 4 }, (err, address) => {
       if (err) return reject(err);
@@ -31,33 +28,27 @@ async function resolveIPv4(hostname) {
 }
 
 function makePool(connectionString) {
-  // Create pool with SSL (Supabase requires TLS). rejectUnauthorized:false is common on PaaS.
   return new Pool({
     connectionString,
     ssl: {
+      // PaaS environment: accept server cert (commonly used)
       rejectUnauthorized: false,
     },
-    // optional: tune pool settings
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 20000,
   });
 }
 
-/**
- * createPoolWithIpv4Fallback
- * - Tries to create a Pool using the DATABASE_URL.
- * - If connection fails with ENETUNREACH (IPv6/network unreachable), resolves IPv4 and retries.
- */
 async function createPoolWithIpv4Fallback(originalConnStr) {
   preferIPv4Dns();
 
   let pool = makePool(originalConnStr);
 
   try {
-    // quick health-check query to force a connect attempt and catch immediate errors
+    // Force a quick connect attempt
     await pool.query("SELECT 1");
-    console.log("[db] connected using original host.");
+    console.log("[db] connected using original host");
     return pool;
   } catch (err) {
     console.error(
@@ -65,62 +56,62 @@ async function createPoolWithIpv4Fallback(originalConnStr) {
       err && err.message ? err.message : err
     );
 
-    // If it's ENETUNREACH (network unreachable), try IPv4 fallback
     if (err && err.code === "ENETUNREACH") {
+      // try IPv4 fallback
       try {
         const url = new URL(originalConnStr);
         const hostname = url.hostname;
-        console.log(`[db] resolving IPv4 for host ${hostname}...`);
+        console.log(`[db] resolving IPv4 for ${hostname}...`);
         const ipv4 = await resolveIPv4(hostname);
-        console.log(
-          `[db] resolved IPv4: ${ipv4} — retrying connection using IPv4 address...`
-        );
-
+        console.log(`[db] resolved IPv4: ${ipv4}`);
         const ipv4ConnStr = buildConnectionStringWithHost(
           originalConnStr,
           ipv4
         );
 
-        // close old pool clients
+        // close the previous pool (best effort)
         try {
           await pool.end();
         } catch (e) {
           console.warn(
-            "[db] warning closing old pool:",
+            "[db] error closing old pool:",
             e && e.message ? e.message : e
           );
         }
 
         pool = makePool(ipv4ConnStr);
         await pool.query("SELECT 1");
-        console.log("[db] connected using IPv4 address.");
+        console.log("[db] connected using IPv4 address");
         return pool;
       } catch (ipv4Err) {
         console.error(
           "[db] IPv4 fallback failed:",
           ipv4Err && ipv4Err.message ? ipv4Err.message : ipv4Err
         );
-        // rethrow the original or fallback error so app startup can fail cleanly
         throw ipv4Err;
       }
     }
 
-    // If not ENETUNREACH, just rethrow to surface the real error (auth/ssl/etc).
+    // rethrow other errors (auth/ssl/etc) to surface them
     throw err;
   }
 }
 
+// lazy init
 let poolPromise = null;
-
-function getPool() {
+async function getPool() {
   if (!poolPromise) {
     const connStr = process.env.DATABASE_URL;
-    if (!connStr) {
-      throw new Error("DATABASE_URL is not defined in environment");
-    }
+    if (!connStr) throw new Error("DATABASE_URL not set in environment");
     poolPromise = createPoolWithIpv4Fallback(connStr);
   }
   return poolPromise;
 }
 
-module.exports = { getPool };
+// convenience query wrapper used by your controllers:
+async function query(text, params) {
+  const pool = await getPool();
+  return pool.query(text, params);
+}
+
+module.exports = { query, getPool };
