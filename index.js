@@ -17,10 +17,7 @@ const app = express();
 const profileViewsRouter = require("./routes/profileViews");
 const bugReportsRouter = require("./routes/bugReports");
 const bookingRoutes = require("./routes/bookingRoutes");
-const allowedOrigins = [
-  "http://localhost:3000",
-  "https://arounduapp.netlify.app",
-];
+const allowedOrigins = ["http://localhost:3000", "https://aroundu.me"];
 
 app.use(
   cors({
