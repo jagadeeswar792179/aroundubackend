@@ -8,7 +8,9 @@ const followRoutesFactory = require("./routes/followRoutes");
 const exploreRoutes = require("./routes/exploreRoutes");
 // routes
 const searchRoutes = require("./routes/searchRoutes");
+const forgotPasswordRoutes = require("./routes/forgotPasswordRoutes");
 const authRoutes = require("./routes/authRoutes");
+const otpRoutes = require("./routes/otpRoutes");
 const userRoutes = require("./routes/userRoutes");
 const messageRoutesFactory = require("./routes/messageRoutes"); // will receive io
 const testUserRoutes = require("./routes/testUserRoutes");
@@ -66,6 +68,8 @@ app.use("/api", bookingRoutes);
 
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
+app.use("/api/AuthOtp", otpRoutes);
+app.use("/api/forgot-password", forgotPasswordRoutes);
 app.use("/api/messages", messageRoutesFactory(io)); // pass io to messages routes
 app.use("/api/follow", followRoutesFactory(io));
 app.use("/api/explore", exploreRoutes);
