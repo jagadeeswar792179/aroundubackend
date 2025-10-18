@@ -1,6 +1,7 @@
 const express = require("express");
 const { Resend } = require("resend"); // <-- destructure here
 const router = express.Router();
+const pool = require("../config/db");
 const resend = new Resend(process.env.RESEND_API_KEY);
 // In-memory store (for production use DB/Redis)
 const otpStoreForgot = new Map();
@@ -13,10 +14,17 @@ router.post("/send-otp", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ msg: "Email is required" });
 
-  const otp = generateOtp();
-  otpStoreForgot.set(email, { otp, expires: Date.now() + OTP_EXPIRY });
-
   try {
+    const checkEmail = await pool.query(
+      "SELECT 1 FROM users WHERE email = $1",
+      [email]
+    );
+    if (checkEmail.rows.length === 0) {
+      return res.status(400).json({ msg: "Email is not  registered" });
+    }
+
+    const otp = generateOtp();
+    otpStoreForgot.set(email, { otp, expires: Date.now() + OTP_EXPIRY });
     await resend.emails.send({
       from: "Aroundu@aroundu.me", // must be verified in Resend
       to: email,

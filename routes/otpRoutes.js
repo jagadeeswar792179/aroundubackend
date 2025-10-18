@@ -17,18 +17,19 @@ router.post("/send-otp", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ msg: "Email is required" });
 
-  const otp = generateOtp();
-  const expires = Date.now() + OTP_EXPIRY;
-
-  otpStore.set(email, { otp, expires });
-
   try {
+    const otp = generateOtp();
+    const expires = Date.now() + OTP_EXPIRY;
+
+    otpStore.set(email, { otp, expires });
+
     await resend.emails.send({
       from: "AroundU@aroundu.me", // change to your verified sender
       to: email,
       subject: "Your OTP Code",
       text: `Your OTP code is ${otp}. It expires in 5 minutes.`,
     });
+
     res.json({ msg: "OTP sent successfully" });
   } catch (err) {
     console.error(err);
