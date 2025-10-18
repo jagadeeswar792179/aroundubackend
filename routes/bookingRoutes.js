@@ -1,6 +1,7 @@
 // routes/bookingRoutes.js
 const express = require("express");
-const pool = require("../config/db");
+// db exports: { query, getPool }
+const db = require("../config/db");
 const auth = require("../middlewares/authMiddleware");
 const router = express.Router();
 
@@ -12,6 +13,9 @@ try {
   generatePresignedUrl = null;
 }
 
+// small env helper used in error mapping
+const isDev = process.env.NODE_ENV !== "production";
+
 /* Helper middleware */
 function requireProfessor(req, res, next) {
   if (!req.user) return res.status(401).json({ error: "Not authenticated" });
@@ -20,11 +24,21 @@ function requireProfessor(req, res, next) {
   next();
 }
 
-/* Utility: iso date string YYYY-MM-DD for today (server timezone) */
+/* Utility: local YYYY-MM-DD helpers (server LOCAL timezone) */
 function todayIso() {
   const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString().split("T")[0];
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function dateOnlyLocalString(d) {
+  // accepts Date or date-string; returns local YYYY-MM-DD
+  const dt = new Date(d);
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, "0");
+  const day = String(dt.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 /* ----------------------------
@@ -44,8 +58,10 @@ router.get("/week", auth, async (req, res) => {
       return res.status(400).json({ error: "Invalid start date" });
     const endDate = new Date(startDate);
     endDate.setDate(endDate.getDate() + 6);
+
+    // keep start as provided, compute end using local date helper
     const startIso = start;
-    const endIso = endDate.toISOString().split("T")[0];
+    const endIso = dateOnlyLocalString(endDate);
 
     const sql = `
       SELECT si.*, s.professor_id AS template_professor_id, s.notes AS template_notes, s.capacity AS template_capacity,
@@ -57,21 +73,21 @@ router.get("/week", auth, async (req, res) => {
       WHERE si.date BETWEEN $1::date AND $2::date
       ORDER BY si.date, si.start_ts;
     `;
-    const { rows } = await pool.query(sql, [startIso, endIso]);
+    const { rows } = await db.query(sql, [startIso, endIso]);
 
     // counts
     const ids = rows.map((r) => r.id);
     let pendingCounts = {};
     let acceptedCounts = {};
     if (ids.length > 0) {
-      const pc = await pool.query(
+      const pc = await db.query(
         `SELECT slot_instance_id, COUNT(*)::int as cnt FROM booking_requests WHERE slot_instance_id = ANY($1) AND status = 'pending' GROUP BY slot_instance_id`,
         [ids]
       );
       pc.rows.forEach(
         (r) => (pendingCounts[r.slot_instance_id] = Number(r.cnt))
       );
-      const ac = await pool.query(
+      const ac = await db.query(
         `SELECT slot_instance_id, COUNT(*)::int as cnt FROM bookings WHERE slot_instance_id = ANY($1) GROUP BY slot_instance_id`,
         [ids]
       );
@@ -160,7 +176,7 @@ router.get("/slot-instances", auth, async (req, res) => {
       ORDER BY si.start_ts;
     `;
 
-    const { rows } = await pool.query(sql, params);
+    const { rows } = await db.query(sql, params);
     const mapped = rows.map((r) => ({
       id: r.id,
       slot_id: r.slot_id,
@@ -185,11 +201,6 @@ router.get("/slot-instances", auth, async (req, res) => {
  GET /api/requests?status=pending&limit=10&offset=0&search=...&slotInstanceId=...
  - returns incoming requests for authenticated professor with pagination, search and optional slotInstance filter
 ----------------------------- */
-/* ----------------------------
- GET /api/requests?status=pending&limit=10&offset=0&search=...&slotInstanceId=...
- - returns incoming requests for authenticated professor with pagination, search and optional slotInstance filter
------------------------------ */
-// GET /api/requests?status=pending&limit=10&offset=0&search=...&slotInstanceId=...
 router.get("/requests", auth, async (req, res) => {
   try {
     const status = req.query.status || null; // e.g. 'pending'
@@ -257,7 +268,7 @@ router.get("/requests", auth, async (req, res) => {
       LIMIT $${params.length - 1} OFFSET $${params.length}
     `;
 
-    const { rows } = await pool.query(sql, params);
+    const { rows } = await db.query(sql, params);
 
     // Convert rows: produce profile_presigned by calling generatePresignedUrl(profile_key) if util present
     const results = await Promise.all(
@@ -314,6 +325,9 @@ router.post(
   async (req, res) => {
     const professorId = req.user.id;
     const { date, ranges } = req.body;
+
+    console.log("POST /slot-instances/batch body:", JSON.stringify(req.body));
+
     try {
       if (!date || !Array.isArray(ranges) || ranges.length === 0) {
         return res
@@ -321,109 +335,242 @@ router.post(
           .json({ error: "date and non-empty ranges array required" });
       }
 
-      // server-side: reject past dates
+      // server-side: reject past dates (compare as local YYYY-MM-DD)
       const today = todayIso();
       if (date < today)
         return res
           .status(400)
           .json({ error: "Cannot create slot instances for past dates" });
 
-      // validate each range timestamps
-      for (const r of ranges) {
+      // validate each range timestamps and gather normalized objects
+      const normalizedRanges = [];
+      for (let idx = 0; idx < ranges.length; idx++) {
+        const r = ranges[idx] || {};
         if (!r.start_ts || !r.end_ts)
           return res
             .status(400)
-            .json({ error: "Each range must include start_ts and end_ts" });
+            .json({ error: `Range #${idx + 1}: start_ts and end_ts required` });
+
         const s = new Date(r.start_ts);
         const e = new Date(r.end_ts);
-        if (isNaN(s.getTime()) || isNaN(e.getTime()) || s >= e)
-          return res
-            .status(400)
-            .json({ error: "Invalid start/end timestamps" });
-        // ensure both timestamps fall on the provided date (date string)
-        const sDate = s.toISOString().split("T")[0];
-        const eDate = e.toISOString().split("T")[0];
-        if (sDate !== date || eDate !== date)
-          return res.status(400).json({
-            error: "start_ts and end_ts must both be on the provided date",
-          });
-      }
 
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-
-        // Fetch existing instances for this professor on that date (either created_by or from template owned by professor)
-        const existingRes = await client.query(
-          `
-        SELECT si.id, si.start_ts, si.end_ts
-        FROM slot_instances si
-        LEFT JOIN slots s ON si.slot_id = s.id
-        WHERE si.date = $1::date
-          AND (COALESCE(si.created_by, s.professor_id) = $2)
-      `,
-          [date, professorId]
+        console.log(
+          `Range #${idx + 1} parse: start='${r.start_ts}' ->`,
+          s,
+          " end='",
+          r.end_ts,
+          "' ->",
+          e
         );
 
-        const existing = existingRes.rows.map((r) => ({
-          start: new Date(r.start_ts),
-          end: new Date(r.end_ts),
-        }));
-
-        // overlap helper
-        const overlaps = (aStart, aEnd, bStart, bEnd) =>
-          !(aEnd <= bStart || bEnd <= aStart);
-
-        // check overlaps between new ranges and existing + between ranges themselves
-        for (let i = 0; i < ranges.length; i++) {
-          const ri = ranges[i];
-          const sI = new Date(ri.start_ts),
-            eI = new Date(ri.end_ts);
-          for (const ex of existing) {
-            if (overlaps(sI, eI, ex.start, ex.end)) {
-              await client.query("ROLLBACK");
-              return res.status(409).json({
-                error: `Submitted range ${ri.start_ts} - ${ri.end_ts} overlaps existing instance`,
-              });
-            }
-          }
-          for (let j = i + 1; j < ranges.length; j++) {
-            const rj = ranges[j];
-            const sJ = new Date(rj.start_ts),
-              eJ = new Date(rj.end_ts);
-            if (overlaps(sI, eI, sJ, eJ)) {
-              await client.query("ROLLBACK");
-              return res.status(409).json({
-                error: `Submitted ranges ${i + 1} and ${j + 1} overlap`,
-              });
-            }
-          }
+        if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+          return res.status(400).json({
+            error: `Range #${
+              idx + 1
+            }: Invalid start_ts or end_ts (unable to parse)`,
+          });
+        }
+        if (s >= e) {
+          return res.status(400).json({
+            error: `Range #${idx + 1}: start_ts must be before end_ts`,
+          });
         }
 
-        // insert ranges
-        const inserted = [];
-        for (const r of ranges) {
-          const slot_id = r.slot_id || null;
-          const capacity = r.capacity || 0;
-          const notes = r.notes || null;
-          const insertRes = await client.query(
-            `INSERT INTO slot_instances (slot_id, date, start_ts, end_ts, capacity, notes, created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-            [slot_id, date, r.start_ts, r.end_ts, capacity, notes, professorId]
+        const sDate = dateOnlyLocalString(s);
+        const eDate = dateOnlyLocalString(e);
+        console.log(
+          `Range #${
+            idx + 1
+          } local dates: sDate=${sDate}, eDate=${eDate}, provided date=${date}`
+        );
+        if (sDate !== date || eDate !== date) {
+          return res.status(400).json({
+            error: `Range #${
+              idx + 1
+            }: start_ts and end_ts must both be on the provided date (local date). sDate=${sDate} eDate=${eDate} expected=${date}`,
+          });
+        }
+
+        normalizedRanges.push({
+          start_ts: r.start_ts,
+          end_ts: r.end_ts,
+          capacity: r.capacity || 0,
+          notes: r.notes || null,
+          slot_id: r.slot_id || null,
+        });
+      }
+
+      // Use a real pool for transactional path
+      const pool = typeof db.getPool === "function" ? await db.getPool() : null;
+
+      if (pool && typeof pool.connect === "function") {
+        // Preferred path: client-based transaction
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+
+          // Fetch existing instances for this professor on that date
+          const existingRes = await client.query(
+            `
+            SELECT si.id, si.start_ts, si.end_ts
+            FROM slot_instances si
+            LEFT JOIN slots s ON si.slot_id = s.id
+            WHERE si.date = $1::date
+              AND (COALESCE(si.created_by, s.professor_id) = $2)
+          `,
+            [date, professorId]
           );
-          inserted.push(insertRes.rows[0]);
-        }
 
-        await client.query("COMMIT");
-        return res.status(201).json({ inserted });
-      } catch (err) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw err;
-      } finally {
-        client.release();
+          const existing = existingRes.rows.map((r) => ({
+            start: new Date(r.start_ts),
+            end: new Date(r.end_ts),
+          }));
+
+          const overlaps = (aStart, aEnd, bStart, bEnd) =>
+            !(aEnd <= bStart || bEnd <= aStart);
+
+          for (let i = 0; i < normalizedRanges.length; i++) {
+            const ri = normalizedRanges[i];
+            const sI = new Date(ri.start_ts),
+              eI = new Date(ri.end_ts);
+            for (const ex of existing) {
+              if (overlaps(sI, eI, ex.start, ex.end)) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({
+                  error: `Submitted range ${ri.start_ts} - ${ri.end_ts} overlaps existing instance`,
+                });
+              }
+            }
+            for (let j = i + 1; j < normalizedRanges.length; j++) {
+              const rj = normalizedRanges[j];
+              const sJ = new Date(rj.start_ts),
+                eJ = new Date(rj.end_ts);
+              if (overlaps(sI, eI, sJ, eJ)) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({
+                  error: `Submitted ranges ${i + 1} and ${j + 1} overlap`,
+                });
+              }
+            }
+          }
+
+          const inserted = [];
+          for (const r of normalizedRanges) {
+            const insertRes = await client.query(
+              `INSERT INTO slot_instances (slot_id, date, start_ts, end_ts, capacity, notes, created_by)
+               VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+              [
+                r.slot_id,
+                date,
+                r.start_ts,
+                r.end_ts,
+                r.capacity,
+                r.notes,
+                professorId,
+              ]
+            );
+            inserted.push(insertRes.rows[0]);
+          }
+
+          await client.query("COMMIT");
+          return res.status(201).json({ inserted });
+        } catch (err) {
+          try {
+            await client.query("ROLLBACK");
+          } catch (e) {
+            // ignore
+          }
+          throw err;
+        } finally {
+          client.release();
+        }
+      } else {
+        // Fallback: use db.query wrapper and pool.begin/commit via db.query (less ideal but works)
+        try {
+          await db.query("BEGIN");
+
+          const existingRes = await db.query(
+            `
+            SELECT si.id, si.start_ts, si.end_ts
+            FROM slot_instances si
+            LEFT JOIN slots s ON si.slot_id = s.id
+            WHERE si.date = $1::date
+              AND (COALESCE(si.created_by, s.professor_id) = $2)
+          `,
+            [date, professorId]
+          );
+
+          const existing = existingRes.rows.map((r) => ({
+            start: new Date(r.start_ts),
+            end: new Date(r.end_ts),
+          }));
+
+          const overlaps = (aStart, aEnd, bStart, bEnd) =>
+            !(aEnd <= bStart || bEnd <= aStart);
+
+          for (let i = 0; i < normalizedRanges.length; i++) {
+            const ri = normalizedRanges[i];
+            const sI = new Date(ri.start_ts),
+              eI = new Date(ri.end_ts);
+            for (const ex of existing) {
+              if (overlaps(sI, eI, ex.start, ex.end)) {
+                await db.query("ROLLBACK");
+                return res.status(409).json({
+                  error: `Submitted range ${ri.start_ts} - ${ri.end_ts} overlaps existing instance`,
+                });
+              }
+            }
+            for (let j = i + 1; j < normalizedRanges.length; j++) {
+              const rj = normalizedRanges[j];
+              const sJ = new Date(rj.start_ts),
+                eJ = new Date(rj.end_ts);
+              if (overlaps(sI, eI, sJ, eJ)) {
+                await db.query("ROLLBACK");
+                return res.status(409).json({
+                  error: `Submitted ranges ${i + 1} and ${j + 1} overlap`,
+                });
+              }
+            }
+          }
+
+          const inserted = [];
+          for (const r of normalizedRanges) {
+            const insertRes = await db.query(
+              `INSERT INTO slot_instances (slot_id, date, start_ts, end_ts, capacity, notes, created_by)
+               VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+              [
+                r.slot_id,
+                date,
+                r.start_ts,
+                r.end_ts,
+                r.capacity,
+                r.notes,
+                professorId,
+              ]
+            );
+            inserted.push(insertRes.rows[0]);
+          }
+
+          await db.query("COMMIT");
+          return res.status(201).json({ inserted });
+        } catch (err) {
+          try {
+            await db.query("ROLLBACK");
+          } catch (e) {
+            // ignore
+          }
+          throw err;
+        }
       }
     } catch (err) {
-      console.error("POST /slot-instances/batch error", err);
+      console.error(
+        "POST /slot-instances/batch error (handler):",
+        err && err.stack ? err.stack : err
+      );
+
+      if (isDev) {
+        return res.status(500).json({ error: String(err.message || err) });
+      }
       return res.status(500).json({ error: "Failed to create slot instances" });
     }
   }
@@ -452,7 +599,7 @@ router.post("/slots", auth, requireProfessor, async (req, res) => {
         .status(400)
         .json({ error: "start_time must be before end_time" });
 
-    const { rows } = await pool.query(
+    const { rows } = await db.query(
       `INSERT INTO slots (professor_id, weekday, start_time, end_time, capacity, notes) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
       [professorId, weekday, start_time, end_time, capacity, notes]
     );
@@ -476,7 +623,7 @@ router.post("/slot-instances/:id/request", auth, async (req, res) => {
     const message = req.body.message || null;
 
     // check instance exists
-    const inst = await pool.query(
+    const inst = await db.query(
       "SELECT id, COALESCE(created_by, (SELECT professor_id FROM slots WHERE id = si.slot_id)) AS owner FROM slot_instances si WHERE id = $1",
       [instanceId]
     );
@@ -492,14 +639,14 @@ router.post("/slot-instances/:id/request", auth, async (req, res) => {
     }
 
     // prevent duplicates
-    const exists = await pool.query(
+    const exists = await db.query(
       "SELECT id FROM booking_requests WHERE slot_instance_id = $1 AND requester_id = $2",
       [instanceId, req.user.id]
     );
     if (exists.rows.length > 0)
       return res.status(409).json({ error: "You already requested this slot" });
 
-    const { rows } = await pool.query(
+    const { rows } = await db.query(
       "INSERT INTO booking_requests (slot_instance_id, requester_id, requester_message) VALUES ($1,$2,$3) RETURNING *",
       [instanceId, req.user.id, message]
     );
@@ -521,6 +668,14 @@ router.post(
   async (req, res) => {
     const requestId = req.params.id;
     const professorId = String(req.user.id);
+
+    // get pool for transaction
+    const pool = typeof db.getPool === "function" ? await db.getPool() : null;
+    if (!pool) {
+      console.error("DB pool not available for accepting request");
+      return res.status(500).json({ error: "Server DB misconfiguration" });
+    }
+
     const client = await pool.connect();
 
     try {
@@ -684,7 +839,11 @@ router.post(
         .status(500)
         .json({ error: isDev ? err.message : "Failed to accept request" });
     } finally {
-      client.release();
+      try {
+        client.release();
+      } catch (e) {
+        // ignore
+      }
     }
   }
 );
@@ -702,7 +861,7 @@ router.post(
       const requestId = req.params.id;
       const professorId = req.user.id;
       // verify ownership (join to slot->professor)
-      const r = await pool.query(
+      const r = await db.query(
         `
       SELECT br.id, s.professor_id, br.status
       FROM booking_requests br
@@ -719,7 +878,7 @@ router.post(
       if (r.rows[0].status !== "pending")
         return res.status(400).json({ error: "Request not pending" });
 
-      await pool.query(
+      await db.query(
         `UPDATE booking_requests SET status = 'rejected', updated_at = now() WHERE id = $1`,
         [requestId]
       );
@@ -745,7 +904,7 @@ router.delete(
       const professorId = req.user.id;
 
       // ensure that the instance is owned by this professor (either created_by or template's professor)
-      const r = await pool.query(
+      const r = await db.query(
         `
       SELECT si.id, COALESCE(si.created_by, s.professor_id) AS owner
       FROM slot_instances si
@@ -762,7 +921,7 @@ router.delete(
           .status(403)
           .json({ error: "Not authorized to delete this instance" });
 
-      await pool.query("DELETE FROM slot_instances WHERE id = $1", [id]);
+      await db.query("DELETE FROM slot_instances WHERE id = $1", [id]);
       res.json({ msg: "Deleted" });
     } catch (err) {
       console.error("DELETE /slot-instances/:id error", err);
