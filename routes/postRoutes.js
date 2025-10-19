@@ -111,6 +111,100 @@ router.post("/upload", auth, upload.single("image"), async (req, res) => {
   }
 });
 
+router.post("/discussion", auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { content, visibility, tags } = req.body;
+
+    // normalize visibility
+    const vis = visibility === "university" ? "university" : "public";
+
+    // handle tags (must be array, max 7)
+    const tagsArray = Array.isArray(tags)
+      ? tags.slice(0, 7)
+      : typeof tags === "string"
+      ? JSON.parse(tags).slice(0, 7)
+      : [];
+
+    // validate content
+    if (
+      !content ||
+      typeof content !== "string" ||
+      content.trim().length === 0
+    ) {
+      return res.status(400).json({ error: "Content is required" });
+    }
+
+    // insert into DB
+    const insertSql = `
+      INSERT INTO posts (user_id, image_url, caption, tags, is_boosted, visibility, post_type)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *;
+    `;
+    const insertVals = [
+      userId,
+      null,
+      content.trim(),
+      tagsArray,
+      false,
+      vis,
+      "discussion",
+    ];
+    const result = await pool.query(insertSql, insertVals);
+    const created = result.rows[0];
+
+    // fetch user info
+    const userRes = await pool.query(
+      `SELECT id, first_name, last_name, profile, course, university, user_type
+       FROM users WHERE id = $1`,
+      [userId]
+    );
+    const userRow = userRes.rows[0];
+
+    // presign profile URL
+    const signedAvatarUrl = userRow.profile
+      ? await generatePresignedUrl(userRow.profile)
+      : null;
+
+    // normalized response
+    const normalizedPost = {
+      id: created.id,
+      user_id: created.user_id,
+      caption: created.caption, // discussion content
+      tags: created.tags || [],
+      post_type: created.post_type,
+      is_boosted: created.is_boosted,
+      created_at: created.created_at,
+      visibility: created.visibility,
+      like_count: 0,
+      comment_count: 0,
+      liked_by_me: false,
+      saved_by_me: false,
+      liked_users: [],
+      image_url: null,
+      user: {
+        id: userRow.id,
+        first_name: userRow.first_name,
+        last_name: userRow.last_name,
+        avatar_url: signedAvatarUrl,
+        course: userRow.course,
+        university: userRow.university,
+        role: userRow.user_type,
+      },
+      owner_id: created.user_id,
+      follow_status: "follow",
+    };
+
+    return res.status(201).json({
+      msg: "✅ Discussion created successfully",
+      post: normalizedPost,
+    });
+  } catch (err) {
+    console.error("posts.discussion error:", err);
+    return res.status(500).json({ error: "Failed to create discussion" });
+  }
+});
+
 /**
  * Helper: mapRows -> normalized posts with presigned URLs
  * Expects rows as returned by SQL queries selecting posts.* plus user fields
@@ -156,6 +250,7 @@ async function mapPosts(rows, loggedInUserId) {
         is_boosted: post.is_boosted,
         created_at: post.created_at,
         visibility: post.visibility,
+        post_type: post.post_type,
         // engagement fields
         like_count: Number(post.like_count) || 0,
         comment_count: Number(post.comment_count) || 0,
