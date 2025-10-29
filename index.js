@@ -19,6 +19,7 @@ const app = express();
 const profileViewsRouter = require("./routes/profileViews");
 const bugReportsRouter = require("./routes/bugReports");
 const bookingRoutes = require("./routes/bookingRoutes");
+const lostfoundRoutes = require("./routes/lostfound");
 const allowedOrigins = ["http://localhost:3000", "https://aroundu.me"];
 
 app.use(
@@ -63,6 +64,7 @@ io.on("connection", (socket) => {
 app.use("/api/posts", postRoutes);
 
 app.use("/api/test-users", testUserRoutes);
+app.use("/api/lostfound", lostfoundRoutes); // <-- add this here
 // ---- REST routes
 app.use("/api", bookingRoutes);
 

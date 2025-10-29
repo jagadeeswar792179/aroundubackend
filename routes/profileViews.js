@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../config/db");
 const auth = require("../middlewares/authMiddleware"); // sets req.user.id
+const generatePresignedUrl = require("../config/generatePresignedUrl");
 
 // Helper: parse pagination query params
 function parsePaging(q) {
@@ -81,6 +82,29 @@ router.get("/me", auth, async (req, res) => {
     `;
     const viewersRes = await pool.query(viewersSql, [targetId, limit, offset]);
 
+    // Direct presigning (no helper)
+    const viewers = await Promise.all(
+      viewersRes.rows.map(async (row) => {
+        let signedUrl = row.profile_url;
+
+        // Only presign if NOT an http/https URL and not null/empty
+        if (
+          typeof row.profile_url === "string" &&
+          row.profile_url !== "" &&
+          !row.profile_url.startsWith("http")
+        ) {
+          try {
+            signedUrl = await generatePresignedUrl(row.profile_url);
+          } catch (err) {
+            console.error("Error presigning profile:", row.profile_url, err);
+            signedUrl = null; // or "/avatar.jpg"
+          }
+        }
+
+        return { ...row, profile_url: signedUrl };
+      })
+    );
+
     const countSql = `
       SELECT COUNT(DISTINCT viewer_id) AS unique_viewers
       FROM profile_views
@@ -89,15 +113,12 @@ router.get("/me", auth, async (req, res) => {
     const countRes = await pool.query(countSql, [targetId]);
 
     return res.json({
-      viewers: viewersRes.rows,
+      viewers,
       pagination: { page, limit },
       total_unique: parseInt(countRes.rows[0].unique_viewers, 10) || 0,
     });
   } catch (err) {
-    console.error(
-      "GET /api/profile-views/me error:",
-      err && err.stack ? err.stack : err
-    );
+    console.error("GET /api/profile-views/me error:", err);
     return res.status(500).json({ error: "internal" });
   }
 });
