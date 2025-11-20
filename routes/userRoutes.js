@@ -325,7 +325,7 @@ router.get("/activity", auth, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT p.id, p.image_url, p.caption, p.created_at,p.user_id,u.profile
+      `SELECT p.*,u.first_name,u.last_name
        FROM posts p
        JOIN users u ON p.user_id = u.id
        WHERE p.user_id = $1
