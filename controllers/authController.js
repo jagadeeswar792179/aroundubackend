@@ -2,6 +2,7 @@
 const pool = require("../config/db");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const generatePresignedUrl = require("../config/generatePresignedUrl");
 
 // REGISTER CONTROLLER
 const registerUser = async (req, res) => {
@@ -21,8 +22,15 @@ const registerUser = async (req, res) => {
       specialization,
     } = req.body;
 
+    if (!email || !password || !firstName || !lastName) {
+      return res.status(400).json({ msg: "Missing required fields" });
+    }
+
+    // 🔽 Normalize email
+    const emailLower = email.toLowerCase().trim();
+
     const existing = await pool.query("SELECT * FROM users WHERE email = $1", [
-      email,
+      emailLower,
     ]);
     if (existing.rows.length > 0) {
       return res.status(400).json({ msg: "Email already registered" });
@@ -39,7 +47,7 @@ const registerUser = async (req, res) => {
       [
         firstName,
         lastName,
-        email,
+        emailLower, // ⬅️ store lowercase
         hashed,
         gender,
         userType,
@@ -84,8 +92,16 @@ const registerUser = async (req, res) => {
 const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ msg: "Email and password are required" });
+    }
+
+    // Normalize email
+    const emailLower = email.toLowerCase().trim();
+
     const result = await pool.query("SELECT * FROM users WHERE email = $1", [
-      email,
+      emailLower,
     ]);
     const user = result.rows[0];
 
@@ -94,11 +110,31 @@ const loginUser = async (req, res) => {
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ msg: "Incorrect password" });
 
-    // include university and course in token payload
+    // Get signed profile URL if exists
+    let profileurl = null;
+    try {
+      profileurl = user.profile
+        ? await generatePresignedUrl(user.profile)
+        : null;
+    } catch (e) {
+      profileurl = null;
+    }
+
+    // 🔥 STORE FULL USER DATA IN TOKEN
     const token = jwt.sign(
-      { id: user.id, university: user.university, course: user.course },
+      {
+        id: user.id,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        email: user.email,
+        user_type: user.user_type,
+        university: user.university,
+        course: user.course,
+        location: user.location,
+        profile: profileurl,
+      },
       process.env.JWT_SECRET,
-      { expiresIn: "1d" }
+      { expiresIn: "1h" } // token valid for 7 days
     );
 
     res.json({
@@ -109,8 +145,10 @@ const loginUser = async (req, res) => {
         last_name: user.last_name,
         email: user.email,
         user_type: user.user_type,
+        profile: profileurl,
         university: user.university,
         course: user.course,
+        location: user.location,
       },
     });
   } catch (err) {
@@ -118,6 +156,7 @@ const loginUser = async (req, res) => {
     res.status(500).json({ msg: "Login failed", error: err.message });
   }
 };
+
 // RESET PASSWORD CONTROLLER
 const resetPassword = async (req, res) => {
   try {
@@ -131,9 +170,12 @@ const resetPassword = async (req, res) => {
       return res.status(400).json({ msg: "Passwords do not match" });
     }
 
+    // 🔽 Normalize email
+    const emailLower = email.toLowerCase().trim();
+
     // Check if user exists
     const result = await pool.query("SELECT * FROM users WHERE email = $1", [
-      email,
+      emailLower,
     ]);
     const user = result.rows[0];
     if (!user) {
@@ -146,7 +188,7 @@ const resetPassword = async (req, res) => {
     // Update password in DB
     await pool.query("UPDATE users SET password = $1 WHERE email = $2", [
       hashed,
-      email,
+      emailLower,
     ]);
 
     res.json({ msg: "Password reset successfully" });
@@ -156,6 +198,7 @@ const resetPassword = async (req, res) => {
   }
 };
 
+// CHECK EMAIL EXISTS CONTROLLER
 const checkEmailExists = async (req, res) => {
   try {
     const { email } = req.body;
@@ -164,8 +207,11 @@ const checkEmailExists = async (req, res) => {
       return res.status(400).json({ msg: "Email is required" });
     }
 
+    // 🔽 Normalize email
+    const emailLower = email.toLowerCase().trim();
+
     const result = await pool.query("SELECT id FROM users WHERE email = $1", [
-      email,
+      emailLower,
     ]);
 
     if (result.rows.length > 0) {
@@ -178,4 +224,10 @@ const checkEmailExists = async (req, res) => {
     res.status(500).json({ msg: "Server error", error: err.message });
   }
 };
-module.exports = { registerUser, loginUser, resetPassword, checkEmailExists };
+
+module.exports = {
+  registerUser,
+  loginUser,
+  resetPassword,
+  checkEmailExists,
+};

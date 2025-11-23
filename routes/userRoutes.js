@@ -9,6 +9,28 @@ const uploadToS3 = require("../config/s3Upload");
 const generatePresignedUrl = require("../config/generatePresignedUrl");
 // GET /api/users/me
 // GET /api/users/me
+
+router.put("/update-location", auth, async (req, res) => {
+  try {
+    const userId = req.user.id; // from auth middleware
+    const { location } = req.body;
+
+    if (!location || location.trim() === "") {
+      return res.status(400).json({ msg: "Location is required" });
+    }
+
+    await pool.query("UPDATE users SET location = $1 WHERE id = $2", [
+      location.trim(),
+      userId,
+    ]);
+
+    res.json({ msg: "Location updated", location });
+  } catch (err) {
+    console.error("Update location error:", err);
+    res.status(500).json({ msg: "Failed to update location" });
+  }
+});
+
 router.get("/me", auth, async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -16,6 +38,7 @@ router.get("/me", auth, async (req, res) => {
          id,
          first_name,
          last_name,
+         location,
          email,
          gender,
          dob,
@@ -396,6 +419,7 @@ router.get("/profile/:userId", auth, async (req, res) => {
          id,
          first_name,
          last_name,
+         location,
          university,
          course,
          duration,
