@@ -46,14 +46,23 @@ router.post("/upload", auth, upload.single("image"), async (req, res) => {
     const fileName = req.file.originalname;
     const mimeType = req.file.mimetype;
     const s3Key = await uploadToS3(imageBuffer, fileName, mimeType);
+    const postype = "photo";
 
     // Insert into DB
     const insertSql = `
-      INSERT INTO posts (user_id, image_url, caption, tags, is_boosted, visibility)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO posts (user_id, image_url, caption, tags, is_boosted, post_type, visibility)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *;
     `;
-    const insertVals = [userId, s3Key, caption, tagsArray, false, visibility];
+    const insertVals = [
+      userId,
+      s3Key,
+      caption,
+      tagsArray,
+      false,
+      postype,
+      visibility,
+    ];
     const result = await pool.query(insertSql, insertVals);
     const created = result.rows[0];
 
@@ -88,6 +97,7 @@ router.post("/upload", auth, upload.single("image"), async (req, res) => {
       saved_by_me: false,
       liked_users: [],
       image_url: signedPostUrl,
+      post_type: created.post_type,
       user: {
         id: userRow.id,
         first_name: userRow.first_name,
