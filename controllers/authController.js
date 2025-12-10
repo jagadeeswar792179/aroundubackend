@@ -7,29 +7,38 @@ const generatePresignedUrl = require("../config/generatePresignedUrl");
 // REGISTER CONTROLLER
 const registerUser = async (req, res) => {
   try {
-    const {
-      firstName,
-      lastName,
-      email,
-      password,
-      gender,
-      userType,
-      dob,
-      university,
-      interests,
-      course,
-      duration,
-      specialization,
-    } = req.body;
+    const body = req.body || {};
+
+    // Support both camelCase and snake_case from frontend
+    const firstName = (body.firstName || body.first_name || "").trim();
+    const lastName = (body.lastName || body.last_name || "").trim();
+    const email = (body.email || "").trim();
+    const password = body.password || "";
+    const gender = body.gender || "";
+    const userType = body.userType || body.user_type || "";
+    const dob = body.dob || null;
+    const university = body.university || null;
+    const interests = Array.isArray(body.interests) ? body.interests : [];
+    const course = body.course || null;
+    const duration = body.duration || null;
+    const specialization = body.specialization || null;
+    const blogLink = (body.blogLink || body.blog_link || "").trim() || null;
+
+    // Professors must have blog link
+    if (userType === "professor" && !blogLink) {
+      return res
+        .status(400)
+        .json({ msg: "Blog link is required for professors" });
+    }
 
     if (!email || !password || !firstName || !lastName) {
       return res.status(400).json({ msg: "Missing required fields" });
     }
 
-    // 🔽 Normalize email
+    // Normalize email
     const emailLower = email.toLowerCase().trim();
 
-    const existing = await pool.query("SELECT * FROM users WHERE email = $1", [
+    const existing = await pool.query("SELECT 1 FROM users WHERE email = $1", [
       emailLower,
     ]);
     if (existing.rows.length > 0) {
@@ -38,16 +47,45 @@ const registerUser = async (req, res) => {
 
     const hashed = await bcrypt.hash(password, 10);
 
+    // 🔴 Make sure your users table has these columns:
+    // first_name, last_name, email, password, gender, user_type, dob,
+    // university, interests, course, duration, specialization,
+    // blog_link, verified
     const result = await pool.query(
-      `INSERT INTO users (
-        first_name, last_name, email, password, gender, user_type, dob,
-        university, interests, course, duration, specialization
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-      RETURNING id, first_name, last_name, email, university, course, user_type`,
+      `
+      INSERT INTO users (
+        first_name,
+        last_name,
+        email,
+        password,
+        gender,
+        user_type,
+        dob,
+        university,
+        interests,
+        course,
+        duration,
+        specialization,
+        blog_link,
+        verified
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+      )
+      RETURNING
+        id,
+        first_name,
+        last_name,
+        email,
+        university,
+        course,
+        user_type,
+        blog_link,
+        verified
+      `,
       [
         firstName,
         lastName,
-        emailLower, // ⬅️ store lowercase
+        emailLower,
         hashed,
         gender,
         userType,
@@ -57,19 +95,24 @@ const registerUser = async (req, res) => {
         course || null,
         duration || null,
         specialization || null,
+        blogLink, // can be null
+        false, // verified default
       ]
     );
 
     const user = result.rows[0];
 
-    // create token with extra fields (id, university, course)
     const token = jwt.sign(
-      { id: user.id, university: user.university, course: user.course },
+      {
+        id: user.id,
+        university: user.university,
+        course: user.course,
+      },
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
 
-    res.status(201).json({
+    return res.status(201).json({
       msg: "User registered",
       token,
       user: {
@@ -80,11 +123,15 @@ const registerUser = async (req, res) => {
         university: user.university,
         course: user.course,
         user_type: user.user_type,
+        blog_link: user.blog_link,
+        verified: user.verified,
       },
     });
   } catch (err) {
     console.error("Register error:", err);
-    res.status(500).json({ msg: "Registration failed", error: err.message });
+    return res
+      .status(500)
+      .json({ msg: "Registration failed", error: err.message });
   }
 };
 

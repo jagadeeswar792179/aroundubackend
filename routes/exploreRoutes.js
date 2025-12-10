@@ -30,76 +30,118 @@ router.get("/professors", auth, async (req, res) => {
       return res.json({ professors: [], hasMore: false, totalMatching: 0 });
     }
 
+    const meId = req.user.id;
+
     // fetch current user's university (safe access)
     const uRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
-      [req.user.id]
+      [meId]
     );
-    const myUniversity = uRes.rows?.[0]?.university || null;
+    const myUniversity =
+      typeof uRes.rows?.[0]?.university === "string"
+        ? uRes.rows[0].university.trim()
+        : null;
 
     // same_university requested but user has no university -> empty result
     if (sameUniversityFlag && !myUniversity) {
       return res.json({ professors: [], hasMore: false, totalMatching: 0 });
     }
 
-    // Build queries depending on flag and whether current user has a university
     let countQuery, countParams;
     let dataQuery, dataParams;
 
     if (sameUniversityFlag) {
+      // 🔹 Professors from SAME university, excluding blocked in both directions
       countQuery = `
         SELECT COUNT(*)::int AS cnt
-        FROM users
-        WHERE user_type = 'professor' AND university = $1
+        FROM users u
+        WHERE u.user_type = 'professor'
+          AND u.university = $2
+          AND NOT EXISTS (
+            SELECT 1 FROM blocks b
+            WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+               OR (b.blocker_id = u.id AND b.blocked_id = $1)
+          )
       `;
-      countParams = [myUniversity];
+      countParams = [meId, myUniversity];
 
       dataQuery = `
-        SELECT id, first_name, last_name, profile AS profile_key,
-               university, specialization, about, course, followers_count, created_at
-        FROM users
-        WHERE user_type = 'professor' AND university = $3
-        ORDER BY followers_count DESC NULLS LAST, created_at DESC
-        OFFSET $1 LIMIT $2
+        SELECT u.id, u.first_name, u.last_name, u.profile AS profile_key,
+               u.university, u.specialization, u.about, u.course,
+               u.followers_count, u.created_at
+        FROM users u
+        WHERE u.user_type = 'professor'
+          AND u.university = $2
+          AND NOT EXISTS (
+            SELECT 1 FROM blocks b
+            WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+               OR (b.blocker_id = u.id AND b.blocked_id = $1)
+          )
+        ORDER BY u.followers_count DESC NULLS LAST, u.created_at DESC
+        OFFSET $3 LIMIT $4
       `;
-      dataParams = [offset, limit, myUniversity];
+      dataParams = [meId, myUniversity, offset, limit];
     } else {
       if (myUniversity) {
+        // 🔹 Professors from OTHER universities, excluding blocked in both directions
         countQuery = `
           SELECT COUNT(*)::int AS cnt
-          FROM users
-          WHERE user_type = 'professor' AND (university IS NULL OR university <> $1)
+          FROM users u
+          WHERE u.user_type = 'professor'
+            AND (u.university IS NULL OR u.university <> $2)
+            AND NOT EXISTS (
+              SELECT 1 FROM blocks b
+              WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                 OR (b.blocker_id = u.id AND b.blocked_id = $1)
+            )
         `;
-        countParams = [myUniversity];
+        countParams = [meId, myUniversity];
 
-        /* REPLACED ORDER BY random() -> deterministic ordering so pagination is stable */
         dataQuery = `
-          SELECT id, first_name, last_name, profile AS profile_key,
-                 university, specialization, about, course, followers_count, created_at
-          FROM users
-          WHERE user_type = 'professor' AND (university IS NULL OR university <> $3)
-          ORDER BY followers_count DESC NULLS LAST, created_at DESC
-          OFFSET $1 LIMIT $2
+          SELECT u.id, u.first_name, u.last_name, u.profile AS profile_key,
+                 u.university, u.specialization, u.about, u.course,
+                 u.followers_count, u.created_at
+          FROM users u
+          WHERE u.user_type = 'professor'
+            AND (u.university IS NULL OR u.university <> $2)
+            AND NOT EXISTS (
+              SELECT 1 FROM blocks b
+              WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                 OR (b.blocker_id = u.id AND b.blocked_id = $1)
+            )
+          ORDER BY u.followers_count DESC NULLS LAST, u.created_at DESC
+          OFFSET $3 LIMIT $4
         `;
-        dataParams = [offset, limit, myUniversity];
+        dataParams = [meId, myUniversity, offset, limit];
       } else {
+        // 🔹 User has no university -> any professor, excluding blocked in both directions
         countQuery = `
           SELECT COUNT(*)::int AS cnt
-          FROM users
-          WHERE user_type = 'professor'
+          FROM users u
+          WHERE u.user_type = 'professor'
+            AND NOT EXISTS (
+              SELECT 1 FROM blocks b
+              WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                 OR (b.blocker_id = u.id AND b.blocked_id = $1)
+            )
         `;
-        countParams = [];
+        countParams = [meId];
 
-        /* REPLACED ORDER BY random() -> deterministic ordering */
         dataQuery = `
-          SELECT id, first_name, last_name, profile AS profile_key,
-                 university, specialization, about, course, followers_count, created_at
-          FROM users
-          WHERE user_type = 'professor'
-          ORDER BY followers_count DESC NULLS LAST, created_at DESC
-          OFFSET $1 LIMIT $2
+          SELECT u.id, u.first_name, u.last_name, u.profile AS profile_key,
+                 u.university, u.specialization, u.about, u.course,
+                 u.followers_count, u.created_at
+          FROM users u
+          WHERE u.user_type = 'professor'
+            AND NOT EXISTS (
+              SELECT 1 FROM blocks b
+              WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                 OR (b.blocker_id = u.id AND b.blocked_id = $1)
+            )
+          ORDER BY u.followers_count DESC NULLS LAST, u.created_at DESC
+          OFFSET $2 LIMIT $3
         `;
-        dataParams = [offset, limit];
+        dataParams = [meId, offset, limit];
       }
     }
 
@@ -110,13 +152,10 @@ router.get("/professors", auth, async (req, res) => {
       MAX_TOTAL
     );
 
-    // fetch page
     const dataRes = await pool.query(dataQuery, dataParams);
     const rows = Array.isArray(dataRes.rows) ? dataRes.rows : [];
 
-    // Defensive presigning:
-    // - support async generatePresignedUrl (await)
-    // - if presign fails for a row, log warning and return null for avatar_url (don't 500)
+    // presign avatars (safe)
     const presigned = await Promise.all(
       rows.map(async (r) => {
         try {
@@ -134,11 +173,11 @@ router.get("/professors", auth, async (req, res) => {
       })
     );
 
-    const professors = rows.map((r) => ({
+    const professors = rows.map((r, idx) => ({
       id: r.id,
       first_name: r.first_name,
       last_name: r.last_name,
-      avatar_url: r.profile_key ? generatePresignedUrl(r.profile_key) : null,
+      avatar_url: presigned[idx] || null,
       university: r.university,
       specialization: r.specialization,
       about: r.about,
@@ -149,7 +188,6 @@ router.get("/professors", auth, async (req, res) => {
     const loadedSoFar = offset + professors.length;
     const hasMore = loadedSoFar < totalMatching && loadedSoFar < MAX_TOTAL;
 
-    // optional debug: log fetched ids (remove in production)
     console.debug(
       "explore/professors: page",
       page,
@@ -202,66 +240,99 @@ router.get("/people", auth, async (req, res) => {
     let dataSql, dataParams;
 
     if (sameUniversity) {
-      // students from same university (exclude me only)
+      // 🔹 Students from same university, exclude me, exclude blocks (both ways)
       countSql = `
         SELECT COUNT(*)::int AS cnt
         FROM users u
         WHERE u.user_type = 'student'
           AND u.id <> $1
           AND u.university = $2
+          AND NOT EXISTS (
+            SELECT 1 FROM blocks b
+            WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+               OR (b.blocker_id = u.id AND b.blocked_id = $1)
+          )
       `;
       countParams = [meId, myUniversity];
 
       dataSql = `
         SELECT u.id, u.first_name, u.last_name, u.profile AS profile_key,
-               u.university, u.specialization, u.about, u.course, u.interests, u.followers_count, u.created_at
+               u.university, u.specialization, u.about, u.course,
+               u.interests, u.followers_count, u.created_at
         FROM users u
         WHERE u.user_type = 'student'
           AND u.id <> $1
           AND u.university = $2
+          AND NOT EXISTS (
+            SELECT 1 FROM blocks b
+            WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+               OR (b.blocker_id = u.id AND b.blocked_id = $1)
+          )
         ORDER BY u.followers_count DESC NULLS LAST, u.created_at DESC
         OFFSET $3 LIMIT $4
       `;
       dataParams = [meId, myUniversity, offset, limit];
     } else {
-      // Not sameUniversity -> choose students from other universities (if user has one)
       if (myUniversity) {
+        // 🔹 Students from other universities, exclude me, exclude blocks (both ways)
         countSql = `
           SELECT COUNT(*)::int AS cnt
           FROM users u
           WHERE u.user_type = 'student'
             AND u.id <> $1
             AND (u.university IS NULL OR u.university <> $2)
+            AND NOT EXISTS (
+              SELECT 1 FROM blocks b
+              WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                 OR (b.blocker_id = u.id AND b.blocked_id = $1)
+            )
         `;
         countParams = [meId, myUniversity];
 
         dataSql = `
           SELECT u.id, u.first_name, u.last_name, u.profile AS profile_key,
-                 u.university, u.specialization, u.about, u.course, u.interests, u.followers_count, u.created_at
+                 u.university, u.specialization, u.about, u.course,
+                 u.interests, u.followers_count, u.created_at
           FROM users u
           WHERE u.user_type = 'student'
             AND u.id <> $1
             AND (u.university IS NULL OR u.university <> $2)
+            AND NOT EXISTS (
+              SELECT 1 FROM blocks b
+              WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                 OR (b.blocker_id = u.id AND b.blocked_id = $1)
+            )
           ORDER BY u.followers_count DESC NULLS LAST, u.created_at DESC
           OFFSET $3 LIMIT $4
         `;
         dataParams = [meId, myUniversity, offset, limit];
       } else {
-        // user has no university -> return students from everywhere (exclude me)
+        // 🔹 User has no university – all students, exclude me, exclude blocks (both ways)
         countSql = `
           SELECT COUNT(*)::int AS cnt
           FROM users u
           WHERE u.user_type = 'student'
             AND u.id <> $1
+            AND NOT EXISTS (
+              SELECT 1 FROM blocks b
+              WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                 OR (b.blocker_id = u.id AND b.blocked_id = $1)
+            )
         `;
         countParams = [meId];
 
         dataSql = `
           SELECT u.id, u.first_name, u.last_name, u.profile AS profile_key,
-                 u.university, u.specialization, u.about, u.course, u.interests, u.followers_count, u.created_at
+                 u.university, u.specialization, u.about, u.course,
+                 u.interests, u.followers_count, u.created_at
           FROM users u
           WHERE u.user_type = 'student'
             AND u.id <> $1
+            AND NOT EXISTS (
+              SELECT 1 FROM blocks b
+              WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                 OR (b.blocker_id = u.id AND b.blocked_id = $1)
+            )
           ORDER BY u.followers_count DESC NULLS LAST, u.created_at DESC
           OFFSET $2 LIMIT $3
         `;
@@ -282,7 +353,7 @@ router.get("/people", auth, async (req, res) => {
     const dataRes = await pool.query(dataSql, dataParams);
     const rows = Array.isArray(dataRes.rows) ? dataRes.rows : [];
 
-    // Defensive presigning (async): do not throw whole route on presign failure
+    // Defensive presigning (async)
     const presigned = await Promise.all(
       rows.map(async (r) => {
         try {

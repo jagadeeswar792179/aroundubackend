@@ -14,8 +14,13 @@ module.exports = (io) => {
                    c.last_message_id,
                    c.last_message_at
             FROM conversations c
-            WHERE c.user1_id = $1 OR c.user2_id = $1
-          ),
+          WHERE (c.user1_id = $1 OR c.user2_id = $1)
+      AND NOT EXISTS (
+        SELECT 1 FROM blocks b
+        WHERE b.blocker_id = $1
+          AND b.blocked_id = CASE WHEN c.user1_id = $1 THEN c.user2_id ELSE c.user1_id END
+      )
+  ),
           last_msg AS (
             SELECT m.id, m.conversation_id, m.body, m.sender_id, m.created_at
             FROM messages m

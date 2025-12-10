@@ -16,6 +16,7 @@ function parsePage(qs) {
 /**
  * GET /api/search/students?q=...&page=1
  */
+
 router.get("/students", auth, async (req, res) => {
   try {
     const rawQ = (req.query.q || "").toString().trim();
@@ -23,6 +24,7 @@ router.get("/students", auth, async (req, res) => {
 
     const { offset, pageSize } = parsePage(req.query);
     const queryLike = `%${rawQ}%`;
+    const meId = req.user.id;
 
     const sql = `
       SELECT id, first_name, last_name, course, university, profile
@@ -34,10 +36,18 @@ router.get("/students", auth, async (req, res) => {
           university ILIKE $1 OR
           course ILIKE $1
         )
+        -- 🚫 Hide students who have blocked me
+        AND NOT EXISTS (
+          SELECT 1
+          FROM blocks b
+          WHERE b.blocker_id = users.id
+            AND b.blocked_id = $2
+        )
       ORDER BY created_at DESC
-      OFFSET $2 LIMIT $3
+      OFFSET $3 LIMIT $4
     `;
-    const dbRes = await pool.query(sql, [queryLike, offset, pageSize]);
+
+    const dbRes = await pool.query(sql, [queryLike, meId, offset, pageSize]);
 
     // Presign profile images for each student
     const students = await Promise.all(
@@ -73,12 +83,15 @@ router.get("/students", auth, async (req, res) => {
 /**
  * GET /api/search/professors?q=...&page=1
  */
+
 router.get("/professors", auth, async (req, res) => {
   try {
     const rawQ = (req.query.q || "").toString().trim();
     if (!rawQ) return res.json({ results: [] });
+
     const { offset, pageSize } = parsePage(req.query);
     const queryLike = `%${rawQ}%`;
+    const meId = req.user.id;
 
     const sql = `
       SELECT id, first_name, last_name, specialization, university, profile
@@ -90,10 +103,18 @@ router.get("/professors", auth, async (req, res) => {
           university ILIKE $1 OR
           specialization ILIKE $1
         )
+        -- 🚫 Hide professors who have blocked me
+        AND NOT EXISTS (
+          SELECT 1
+          FROM blocks b
+          WHERE b.blocker_id = users.id
+            AND b.blocked_id = $2
+        )
       ORDER BY created_at DESC
-      OFFSET $2 LIMIT $3
+      OFFSET $3 LIMIT $4
     `;
-    const dbRes = await pool.query(sql, [queryLike, offset, pageSize]);
+
+    const dbRes = await pool.query(sql, [queryLike, meId, offset, pageSize]);
 
     // Presign profile images
     const professors = await Promise.all(
@@ -109,6 +130,7 @@ router.get("/professors", auth, async (req, res) => {
             prof.id,
             err && err.message
           );
+          avatarUrl = null;
         }
 
         return {
@@ -132,19 +154,50 @@ router.get("/professors", auth, async (req, res) => {
  * First tries strict case-insensitive element equality (fast). If that returns no rows,
  * falls back to array_to_string substring, then tags::text match (very forgiving).
  */
+// GET /api/search/posts
 router.get("/posts", auth, async (req, res) => {
   try {
     const rawQ = (req.query.q || "").toString();
     let normalized = rawQ.trim();
+
+    // Empty query -> no results
     if (!normalized) return res.json({ results: [] });
+
+    // Strip leading '#'
     if (normalized.startsWith("#")) normalized = normalized.slice(1);
     normalized = normalized.trim();
+
+    // Again, empty after stripping -> no results
     if (!normalized) return res.json({ results: [] });
 
-    const { offset, pageSize } = parsePage(req.query);
+    // ❌ Ignore single-letter searches
+    if (normalized.length < 2) {
+      return res.json({ results: [] });
+    }
 
-    // exact-match SQL (fast)
-    const sqlExact = `
+    const { offset, pageSize } = parsePage(req.query);
+    const userId = req.user.id;
+
+    /**
+     *  - Match tags by exact word (case-insensitive)
+     *      EXISTS (SELECT 1 FROM unnest(posts.tags) t WHERE lower(t) = lower($1))
+     *
+     *  - Match university by exact phrase, but:
+     *      - case-insensitive
+     *      - ignore extra spaces between words
+     *    Using:
+     *      LOWER(regexp_replace(btrim(university), '\s+', ' ', 'g'))
+     *      =
+     *      LOWER(regexp_replace(btrim($1), '\s+', ' ', 'g'))
+     *
+     *  - Exclude blocked in BOTH directions:
+     *      NOT EXISTS (
+     *        SELECT 1 FROM blocks b
+     *        WHERE (b.blocker_id = $4 AND b.blocked_id = posts.user_id)
+     *           OR (b.blocker_id = posts.user_id AND b.blocked_id = $4)
+     *      )
+     */
+    const sql = `
       SELECT 
         posts.*,
         users.first_name,
@@ -157,7 +210,11 @@ router.get("/posts", auth, async (req, res) => {
         COUNT(DISTINCT pl.id) AS like_count,
         BOOL_OR(pl.user_id = $4) AS liked_by_me,
         BOOL_OR(sp.user_id = $4) AS saved_by_me,
-        COALESCE(ARRAY_AGG(DISTINCT u2.first_name || ' ' || u2.last_name) FILTER (WHERE pl.user_id IS NOT NULL), '{}') AS liked_users,
+        COALESCE(
+          ARRAY_AGG(DISTINCT u2.first_name || ' ' || u2.last_name) 
+          FILTER (WHERE pl.user_id IS NOT NULL),
+          '{}'
+        ) AS liked_users,
         COUNT(DISTINCT c.id) AS comment_count
       FROM posts
       JOIN users ON posts.user_id = users.id
@@ -165,121 +222,61 @@ router.get("/posts", auth, async (req, res) => {
       LEFT JOIN users u2 ON pl.user_id = u2.id
       LEFT JOIN comments c ON posts.id = c.post_id
       LEFT JOIN saved_posts sp ON posts.id = sp.post_id
-      WHERE EXISTS (SELECT 1 FROM unnest(posts.tags) AS t WHERE lower(t) = lower($1))
+      WHERE 
+        (
+          -- 🎯 TAGS: exact tag match (case-insensitive)
+          EXISTS (
+            SELECT 1 
+            FROM unnest(posts.tags) AS t 
+            WHERE lower(t) = lower($1)
+          )
+          OR
+          -- 🎯 UNIVERSITY: exact phrase match, but
+          --     - case-insensitive
+          --     - ignores extra spaces between words
+          LOWER(
+            regexp_replace(
+              btrim(users.university),
+              '\\s+',
+              ' ',
+              'g'
+            )
+          ) = LOWER(
+            regexp_replace(
+              btrim($1),
+              '\\s+',
+              ' ',
+              'g'
+            )
+          )
+        )
+        -- 🚫 EXCLUDE USERS I BLOCKED OR WHO BLOCKED ME
+        AND NOT EXISTS (
+          SELECT 1 
+          FROM blocks b
+          WHERE (b.blocker_id = $4 AND b.blocked_id = posts.user_id)
+             OR (b.blocker_id = posts.user_id AND b.blocked_id = $4)
+        )
       GROUP BY posts.id, users.id
       ORDER BY posts.created_at DESC
       OFFSET $2 LIMIT $3
     `;
 
-    // console.log("SEARCH POSTS params:", {
-    //   normalized,
-    //   offset,
-    //   pageSize,
-    //   userId: req.user && req.user.id,
-    // });
-
-    let dbRes = await pool.query(sqlExact, [
-      normalized,
-      offset,
-      pageSize,
-      req.user.id,
+    const dbRes = await pool.query(sql, [
+      normalized, // $1 search term
+      offset, // $2
+      pageSize, // $3
+      userId, // $4
     ]);
-    let rows = dbRes.rows || [];
-    let usedFallback = false;
 
-    if (!rows.length) {
-      // fallback 1: array_to_string substring match
-      usedFallback = true;
-      console.warn(
-        "SEARCH POSTS: exact-match returned 0 rows — trying fallback array_to_string ILIKE."
-      );
-      const sqlFallback = `
-        SELECT 
-          posts.*,
-          users.first_name,
-          users.last_name,
-          users.profile,
-          users.course,
-          users.university,
-          (SELECT status FROM follow_requests WHERE requester_id = $4 AND target_id = posts.user_id LIMIT 1) AS my_follow_status,
-          (SELECT status FROM follow_requests WHERE requester_id = posts.user_id AND target_id = $4 LIMIT 1) AS incoming_follow_status,
-          COUNT(DISTINCT pl.id) AS like_count,
-          BOOL_OR(pl.user_id = $4) AS liked_by_me,
-          BOOL_OR(sp.user_id = $4) AS saved_by_me,
-          COALESCE(ARRAY_AGG(DISTINCT u2.first_name || ' ' || u2.last_name) FILTER (WHERE pl.user_id IS NOT NULL), '{}') AS liked_users,
-          COUNT(DISTINCT c.id) AS comment_count
-        FROM posts
-        JOIN users ON posts.user_id = users.id
-        LEFT JOIN post_likes pl ON posts.id = pl.post_id
-        LEFT JOIN users u2 ON pl.user_id = u2.id
-        LEFT JOIN comments c ON posts.id = c.post_id
-        LEFT JOIN saved_posts sp ON posts.id = sp.post_id
-        WHERE array_to_string(posts.tags, ',') ILIKE '%' || $1 || '%'
-        GROUP BY posts.id, users.id
-        ORDER BY posts.created_at DESC
-        OFFSET $2 LIMIT $3
-      `;
-      dbRes = await pool.query(sqlFallback, [
-        normalized,
-        offset,
-        pageSize,
-        req.user.id,
-      ]);
-      rows = dbRes.rows || [];
-    }
+    const rows = dbRes.rows || [];
 
-    if (!rows.length) {
-      // fallback 2: text-cast match
-      console.warn(
-        "SEARCH POSTS: array_to_string fallback returned 0 rows — trying tags::text match."
-      );
-      const sqlTextCast = `
-        SELECT 
-          posts.*,
-          users.first_name,
-          users.last_name,
-          users.profile,
-          users.course,
-          users.university,
-          (SELECT status FROM follow_requests WHERE requester_id = $4 AND target_id = posts.user_id LIMIT 1) AS my_follow_status,
-          (SELECT status FROM follow_requests WHERE requester_id = posts.user_id AND target_id = $4 LIMIT 1) AS incoming_follow_status,
-          COUNT(DISTINCT pl.id) AS like_count,
-          BOOL_OR(pl.user_id = $4) AS liked_by_me,
-          BOOL_OR(sp.user_id = $4) AS saved_by_me,
-          COALESCE(ARRAY_AGG(DISTINCT u2.first_name || ' ' || u2.last_name) FILTER (WHERE pl.user_id IS NOT NULL), '{}') AS liked_users,
-          COUNT(DISTINCT c.id) AS comment_count
-        FROM posts
-        JOIN users ON posts.user_id = users.id
-        LEFT JOIN post_likes pl ON posts.id = pl.post_id
-        LEFT JOIN users u2 ON pl.user_id = u2.id
-        LEFT JOIN comments c ON posts.id = c.post_id
-        LEFT JOIN saved_posts sp ON posts.id = sp.post_id
-        WHERE tags::text ILIKE '%' || ('"' || $1 || '"') || '%'
-        GROUP BY posts.id, users.id
-        ORDER BY posts.created_at DESC
-        OFFSET $2 LIMIT $3
-      `;
-      dbRes = await pool.query(sqlTextCast, [
-        normalized,
-        offset,
-        pageSize,
-        req.user.id,
-      ]);
-      rows = dbRes.rows || [];
-    }
-
-    // console.log(
-    //   "SEARCH POSTS result count:",
-    //   rows.length,
-    //   "usedFallback:",
-    //   usedFallback
-    // );
-
-    // presign and map
+    // Map + presign URLs (same as your current logic)
     const posts = await Promise.all(
       rows.map(async (post) => {
         const myStatus = post.my_follow_status;
         const incomingStatus = post.incoming_follow_status;
+
         let follow_status = "follow";
         if (myStatus === "accepted" && incomingStatus === "accepted")
           follow_status = "friends";

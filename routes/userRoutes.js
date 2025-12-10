@@ -46,8 +46,10 @@ router.get("/me", auth, async (req, res) => {
          university,
          course,
          duration,
-         profile,
          specialization,
+         profile,
+         verified,     -- ✅ ADD THIS
+         blog_link,    -- ✅ ADD THIS
          COALESCE(interests, ARRAY[]::text[]) AS interests,
          COALESCE(experience, '[]'::jsonb) AS experience,
          COALESCE(projects, '[]'::jsonb) AS projects,
@@ -66,14 +68,14 @@ router.get("/me", auth, async (req, res) => {
 
     const user = rows[0];
 
-    // If profile key exists, generate signed URL
+    // ✅ presign avatar if stored as key
     if (user.profile) {
       user.profile = generatePresignedUrl(user.profile);
     }
 
     res.json(user);
   } catch (err) {
-    console.error(err);
+    console.error("❌ /me failed:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -409,32 +411,46 @@ router.delete("/delete/:id", auth, async (req, res) => {
   }
 });
 
-// GET /api/profile/:id
+// GET /api/user/profile/:userId
+// GET /api/user/profile/:userId
 router.get("/profile/:userId", auth, async (req, res) => {
   try {
     const { userId } = req.params;
+    const viewerId = req.user.id; // logged-in user
 
     const { rows } = await pool.query(
       `SELECT
-         id,
-         first_name,
-         last_name,
-         location,
-         university,
-         course,
-         duration,
-         specialization,
-         profile,
-         COALESCE(interests, ARRAY[]::text[]) AS interests,
-         COALESCE(experience, '[]'::jsonb) AS experience,
-         COALESCE(projects, '[]'::jsonb) AS projects,
-         COALESCE(skills, ARRAY[]::text[]) AS skills,
-         COALESCE(education, '[]'::jsonb) AS education,
-         COALESCE(about, '') AS about,
-         created_at
-       FROM users
-       WHERE id = $1`,
-      [userId]
+         u.id,
+         u.first_name,
+         u.last_name,
+         u.location,
+         u.university,
+         u.course,
+         u.duration,
+         u.specialization,
+         u.profile,
+         COALESCE(u.interests, ARRAY[]::text[]) AS interests,
+         COALESCE(u.experience, '[]'::jsonb) AS experience,
+         COALESCE(u.projects, '[]'::jsonb) AS projects,
+         COALESCE(u.skills, ARRAY[]::text[]) AS skills,
+         COALESCE(u.education, '[]'::jsonb) AS education,
+         COALESCE(u.about, '') AS about,
+         u.created_at,
+
+         -- 🔹 NEW FIELDS
+         u.user_type,
+         u.blog_link,
+         u.verified,
+
+         -- 👇 already there: did *I* block this user?
+         EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE b.blocker_id = $2
+             AND b.blocked_id = u.id
+         ) AS is_blocked_by_me
+       FROM users u
+       WHERE u.id = $1`,
+      [userId, viewerId]
     );
 
     if (!rows.length) {
@@ -443,7 +459,6 @@ router.get("/profile/:userId", auth, async (req, res) => {
 
     const user = rows[0];
 
-    // Generate signed URL for profile picture
     if (user.profile) {
       user.profile = generatePresignedUrl(user.profile);
     }

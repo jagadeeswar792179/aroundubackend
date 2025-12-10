@@ -311,24 +311,21 @@ router.get("/feed/all", auth, async (req, res) => {
     const requesterUniversity = meRes.rows[0]?.university || null;
 
     // Build visibility SQL fragment
-    // If requester has a university, allow posts.visibility = 'university' AND users.university = requesterUniversity
-    // Otherwise only public posts allowed
     let visClause;
-    const params = [offset, pageSize, currentUserId]; // note: $1/$2 used for offset/limit in query; $3 is currentUserId
+    const params = [offset, pageSize, currentUserId]; // $1 offset, $2 limit, $3 currentUserId
     if (requesterUniversity) {
-      // We'll append requesterUniversity as $4
-      visClause = `(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $4))`;
+      visClause =
+        "(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $4))";
       params.push(requesterUniversity); // $4
     } else {
-      visClause = `(posts.visibility = 'public')`;
+      visClause = "(posts.visibility = 'public')";
     }
 
     // Build optional filters (university/course)
     let filterSql = "";
     if (filterUniversity) {
-      // we need to append param for filterUniversity
       params.push(filterUniversity);
-      const idx = params.length; // e.g., 5 or 4
+      const idx = params.length;
       filterSql += ` AND users.university = $${idx}`;
     }
     if (filterCourse) {
@@ -336,12 +333,6 @@ router.get("/feed/all", auth, async (req, res) => {
       const idx = params.length;
       filterSql += ` AND users.course = $${idx}`;
     }
-
-    // final param positions:
-    // OFFSET $1::bigint LIMIT $2::bigint
-    // follow subqueries use $3 (currentUserId)
-    // optional: $4 requesterUniversity
-    // then optional filters appended.
 
     const sql = `
       SELECT 
@@ -366,13 +357,22 @@ router.get("/feed/all", auth, async (req, res) => {
       LEFT JOIN comments c ON posts.id = c.post_id
       LEFT JOIN saved_posts sp ON posts.id = sp.post_id
       WHERE ${visClause}
-      ${filterSql}
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE b.blocker_id = $3
+            AND b.blocked_id = posts.user_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b2
+          WHERE b2.blocker_id = posts.user_id
+            AND b2.blocked_id = $3
+        )
+        ${filterSql}
       GROUP BY posts.id, users.id
       ORDER BY posts.created_at DESC
       OFFSET $1::bigint LIMIT $2::bigint;
     `;
 
-    // final params start with current params order: offset, limit, currentUserId, [requesterUniversity], [filterUniversity], [filterCourse]
     const finalParams = [offset, pageSize, currentUserId];
     if (requesterUniversity) finalParams.push(requesterUniversity);
     if (filterUniversity) finalParams.push(filterUniversity);
@@ -422,12 +422,13 @@ router.get("/feed/interests", auth, async (req, res) => {
     const requesterUniversity = meRes.rows[0]?.university || null;
 
     let visClause;
-    const params = [offset, pageSize, currentUserId, interests]; // position reserved: $4 for interests
+    const params = [offset, pageSize, currentUserId, interests]; // $4 = interests
     if (requesterUniversity) {
-      visClause = `(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $5))`;
+      visClause =
+        "(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $5))";
       params.push(requesterUniversity); // $5
     } else {
-      visClause = `(posts.visibility = 'public')`;
+      visClause = "(posts.visibility = 'public')";
     }
 
     // optional filters
@@ -441,7 +442,6 @@ router.get("/feed/interests", auth, async (req, res) => {
       filterSql += ` AND users.course = $${params.length}`;
     }
 
-    // Note: $4 is interests array for tags matching
     const sql = `
       SELECT
         posts.*,
@@ -465,8 +465,18 @@ router.get("/feed/interests", auth, async (req, res) => {
       LEFT JOIN comments c ON posts.id = c.post_id
       LEFT JOIN saved_posts sp ON posts.id = sp.post_id
       WHERE ${visClause}
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE b.blocker_id = $3
+            AND b.blocked_id = posts.user_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b2
+          WHERE b2.blocker_id = posts.user_id
+            AND b2.blocked_id = $3
+        )
         AND posts.tags && $4::text[]
-      ${filterSql}
+        ${filterSql}
       GROUP BY posts.id, users.id
       ORDER BY posts.created_at DESC
       OFFSET $1::bigint LIMIT $2::bigint;
@@ -517,26 +527,23 @@ router.get("/feed/university", auth, async (req, res) => {
       });
     }
 
-    // Determine visibility: if requester belongs to that university they can see university-visibility posts for that uni.
     const allowUniVisibility =
       requesterUniversity && requesterUniversity === targetUniversity;
 
-    // Build SQL and params
-    // param order: $1 offset, $2 limit, $3 currentUserId, $4 targetUniversity (if allowUniVisibility)
     const params = [offset, pageSize, currentUserId];
-    let visClause = `(posts.visibility = 'public')`;
+    let visClause = "(posts.visibility = 'public')";
     if (allowUniVisibility) {
-      visClause = `(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $4))`;
+      visClause =
+        "(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $4))";
       params.push(targetUniversity); // $4
     }
 
-    // The users.university filter to restrict posts to targetUniversity:
     const userFilter = allowUniVisibility
       ? `AND users.university = $4`
       : `AND users.university = $${params.length + 1}`;
+
     if (!allowUniVisibility) params.push(targetUniversity);
 
-    // Final SQL
     const sql = `
       SELECT
         posts.*,
@@ -560,7 +567,17 @@ router.get("/feed/university", auth, async (req, res) => {
       LEFT JOIN comments c ON posts.id = c.post_id
       LEFT JOIN saved_posts sp ON posts.id = sp.post_id
       WHERE ${visClause}
-      ${userFilter}
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE b.blocker_id = $3
+            AND b.blocked_id = posts.user_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b2
+          WHERE b2.blocker_id = posts.user_id
+            AND b2.blocked_id = $3
+        )
+        ${userFilter}
       GROUP BY posts.id, users.id
       ORDER BY posts.created_at DESC
       OFFSET $1::bigint LIMIT $2::bigint;
@@ -596,21 +613,19 @@ router.get("/feed/course", auth, async (req, res) => {
     if (!targetCourse)
       return res.status(400).json({ error: "course parameter is required" });
 
-    // fetch requester's university to allow uni-visibility posts
     const meRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
       [currentUserId]
     );
     const requesterUniversity = meRes.rows[0]?.university || null;
 
-    // param positions: $1 offset, $2 limit, $3 currentUserId, $4 targetCourse, optional $5 requesterUniversity
     const params = [offset, pageSize, currentUserId, targetCourse];
 
-    // visibility clause: public OR (visibility='university' AND users.university = requesterUniversity) [only if requesterUniversity present]
     let visibilityClause = `posts.visibility = 'public'`;
     if (requesterUniversity) {
       params.push(requesterUniversity); // $5
-      visibilityClause = `(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $5))`;
+      visibilityClause =
+        "(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $5))";
     }
 
     const sql = `
@@ -637,6 +652,16 @@ router.get("/feed/course", auth, async (req, res) => {
       LEFT JOIN saved_posts sp ON posts.id = sp.post_id
       WHERE users.course = $4
         AND (${visibilityClause})
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE b.blocker_id = $3
+            AND b.blocked_id = posts.user_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b2
+          WHERE b2.blocker_id = posts.user_id
+            AND b2.blocked_id = $3
+        )
       GROUP BY posts.id, users.id
       ORDER BY posts.created_at DESC
       OFFSET $1::bigint LIMIT $2::bigint;
@@ -668,7 +693,6 @@ router.get("/tag/:tag", auth, async (req, res) => {
     const filterCourse = req.query.course || null;
     const currentUserId = req.user.id;
 
-    // fetch requester university for visibility
     const meRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
       [currentUserId]
@@ -676,23 +700,19 @@ router.get("/tag/:tag", auth, async (req, res) => {
     const requesterUniversity = meRes.rows[0]?.university || null;
 
     const params = [offset, pageSize, currentUserId, tag]; // $4 = tag
-    let visClause = `(posts.visibility = 'public')`;
+    let visClause = "(posts.visibility = 'public')";
     if (requesterUniversity) {
-      visClause = `(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $5))`;
+      visClause =
+        "(posts.visibility = 'public' OR (posts.visibility = 'university' AND users.university = $5))";
       params.push(requesterUniversity); // $5
     }
 
-    if (filterUniversity) {
-      params.push(filterUniversity);
-    }
-    if (filterCourse) {
-      params.push(filterCourse);
-    }
+    if (filterUniversity) params.push(filterUniversity);
+    if (filterCourse) params.push(filterCourse);
 
-    // Build filters referencing correct param index positions
     const filterSqlParts = [];
     if (filterUniversity) {
-      const idx = params.indexOf(filterUniversity) + 1; // 1-based param index for SQL placeholders
+      const idx = params.indexOf(filterUniversity) + 1;
       filterSqlParts.push(`users.university = $${idx}`);
     }
     if (filterCourse) {
@@ -724,8 +744,18 @@ router.get("/tag/:tag", auth, async (req, res) => {
       LEFT JOIN comments c ON posts.id = c.post_id
       LEFT JOIN saved_posts sp ON posts.id = sp.post_id
       WHERE ${visClause}
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE b.blocker_id = $3
+            AND b.blocked_id = posts.user_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b2
+          WHERE b2.blocker_id = posts.user_id
+            AND b2.blocked_id = $3
+        )
         AND $4 = ANY(posts.tags)
-      ${filterSql}
+        ${filterSql}
       GROUP BY posts.id, users.id
       ORDER BY posts.created_at DESC
       OFFSET $1::bigint LIMIT $2::bigint;
@@ -737,7 +767,6 @@ router.get("/tag/:tag", auth, async (req, res) => {
     if (filterCourse) finalParams.push(filterCourse);
 
     const result = await pool.query(sql, finalParams);
-
     const posts = await mapPosts(result.rows, currentUserId);
     res.json({ posts });
   } catch (err) {
