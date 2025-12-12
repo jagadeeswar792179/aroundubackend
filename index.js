@@ -22,6 +22,7 @@ const bookingRoutes = require("./routes/bookingRoutes");
 const lostfoundRoutes = require("./routes/lostfound");
 const allowedOrigins = ["http://localhost:3000", "https://aroundu.me"];
 const moderationRoutes = require("./routes/moderationRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 
 app.use(
   cors({
@@ -63,7 +64,7 @@ io.on("connection", (socket) => {
   });
 });
 app.use("/api/posts", postRoutes);
-
+app.use("/api/admin", adminRoutes);
 app.use("/api/test-users", testUserRoutes);
 app.use("/api/lostfound", lostfoundRoutes); // <-- add this here
 // ---- REST routes
