@@ -23,7 +23,7 @@ const lostfoundRoutes = require("./routes/lostfound");
 const allowedOrigins = [
   "http://localhost:3000",
   "https://aroundu.me",
-  "https://aroundu-admin.netlify.app/",
+  "https://aroundu-admin.netlify.app",
 ];
 const moderationRoutes = require("./routes/moderationRoutes");
 const adminRoutes = require("./routes/adminRoutes");
