@@ -20,7 +20,11 @@ const profileViewsRouter = require("./routes/profileViews");
 const bugReportsRouter = require("./routes/bugReports");
 const bookingRoutes = require("./routes/bookingRoutes");
 const lostfoundRoutes = require("./routes/lostfound");
-const allowedOrigins = ["http://localhost:3000", "https://aroundu.me"];
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://aroundu.me",
+  "https://aroundu-admin.netlify.app/",
+];
 const moderationRoutes = require("./routes/moderationRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 
