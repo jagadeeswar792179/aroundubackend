@@ -1,5 +1,7 @@
 // index.js
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
@@ -15,6 +17,8 @@ const userRoutes = require("./routes/userRoutes");
 const messageRoutesFactory = require("./routes/messageRoutes"); // will receive io
 const testUserRoutes = require("./routes/testUserRoutes");
 const postRoutes = require("./routes/postRoutes");
+const marketplaceRoutes = require("./routes/marketplaceRoutes");
+
 const app = express();
 const profileViewsRouter = require("./routes/profileViews");
 const bugReportsRouter = require("./routes/bugReports");
@@ -67,6 +71,7 @@ io.on("connection", (socket) => {
     // optional: presence cleanup later
   });
 });
+app.use("/api/marketplace", marketplaceRoutes);
 app.use("/api/posts", postRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/test-users", testUserRoutes);

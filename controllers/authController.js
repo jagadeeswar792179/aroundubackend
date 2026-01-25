@@ -181,7 +181,7 @@ const loginUser = async (req, res) => {
         profile: profileurl,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "1h" } // token valid for 7 days
+      { expiresIn: "7d" } // token valid for 7 days
     );
 
     res.json({
