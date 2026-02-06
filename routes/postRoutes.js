@@ -778,6 +778,125 @@ router.get("/tag/:tag", auth, async (req, res) => {
   }
 });
 
+// router.get("/user/:userId", auth, async (req, res) => {
+//   const { userId } = req.params;
+//   const page = parseInt(req.query.page || "1", 10);
+//   const pageSize = 10;
+//   const offset = (page - 1) * pageSize;
+//   const currentUserId = req.user.id;
+
+//   const sql = `
+//     SELECT
+//       posts.*,
+//       users.first_name,
+//       users.last_name,
+//       users.profile,
+//       users.course,
+//       users.university,
+//       users.user_type,
+//       (SELECT status FROM follow_requests 
+//         WHERE requester_id = $3 AND target_id = posts.user_id LIMIT 1) AS my_follow_status,
+//       (SELECT status FROM follow_requests 
+//         WHERE requester_id = posts.user_id AND target_id = $3 LIMIT 1) AS incoming_follow_status,
+//       COUNT(DISTINCT pl.id) AS like_count,
+//       BOOL_OR(pl.user_id = $3) AS liked_by_me,
+//       BOOL_OR(sp.user_id = $3) AS saved_by_me,
+//       COUNT(DISTINCT c.id) AS comment_count
+//     FROM posts
+//     JOIN users ON posts.user_id = users.id
+//     LEFT JOIN post_likes pl ON posts.id = pl.post_id
+//     LEFT JOIN comments c ON posts.id = c.post_id
+//     LEFT JOIN saved_posts sp ON posts.id = sp.post_id
+//     WHERE posts.user_id = $1
+//     GROUP BY posts.id, users.id
+//     ORDER BY posts.created_at DESC
+//     OFFSET $2 LIMIT $4;
+//   `;
+
+//   const result = await pool.query(sql, [
+//     userId,
+//     offset,
+//     currentUserId,
+//     pageSize,
+//   ]);
+
+//   const posts = await mapPosts(result.rows, currentUserId);
+//   res.json({ posts });
+// });
+
+
+
+// GET single post by ID (full post, feed-style)
+
+
+router.get("/:postId", auth, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const currentUserId = req.user.id;
+
+    const sql = `
+      SELECT
+        posts.*,
+        users.first_name,
+        users.last_name,
+        users.profile,
+        users.course,
+        users.university,
+        users.user_type,
+
+        (SELECT status FROM follow_requests
+          WHERE requester_id = $2 AND target_id = posts.user_id
+          LIMIT 1) AS my_follow_status,
+
+        (SELECT status FROM follow_requests
+          WHERE requester_id = posts.user_id AND target_id = $2
+          LIMIT 1) AS incoming_follow_status,
+
+        COUNT(DISTINCT pl.id) AS like_count,
+        BOOL_OR(pl.user_id = $2) AS liked_by_me,
+        BOOL_OR(sp.user_id = $2) AS saved_by_me,
+        COUNT(DISTINCT c.id) AS comment_count
+
+      FROM posts
+      JOIN users ON posts.user_id = users.id
+      LEFT JOIN post_likes pl ON posts.id = pl.post_id
+      LEFT JOIN comments c ON posts.id = c.post_id
+      LEFT JOIN saved_posts sp ON posts.id = sp.post_id
+
+      WHERE posts.id = $1
+
+        -- 🔒 block checks
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE b.blocker_id = $2
+            AND b.blocked_id = posts.user_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b2
+          WHERE b2.blocker_id = posts.user_id
+            AND b2.blocked_id = $2
+        )
+
+      GROUP BY posts.id, users.id
+      LIMIT 1;
+    `;
+
+    const result = await pool.query(sql, [postId, currentUserId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    // ✅ reuse your existing normalizer
+    const [post] = await mapPosts(result.rows, currentUserId);
+
+    res.json(post);
+  } catch (err) {
+    console.error("❌ Fetch single post error:", err);
+    res.status(500).json({ error: "Failed to fetch post" });
+  }
+});
+
 /**
  * COMMENTS: POST /api/posts/:postId/comments
  */

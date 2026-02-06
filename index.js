@@ -71,6 +71,7 @@ io.on("connection", (socket) => {
     // optional: presence cleanup later
   });
 });
+app.use("/api/universities", require("./routes/universities"));
 app.use("/api/marketplace", marketplaceRoutes);
 app.use("/api/posts", postRoutes);
 app.use("/api/admin", adminRoutes);

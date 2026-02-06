@@ -263,83 +263,63 @@ router.patch("/interests", auth, async (req, res) => {
   }
 });
 
+
+// GET saved posts (GRID VIEW ONLY)
 router.get("/saved-posts", auth, async (req, res) => {
-  const userId = req.user.id; // from JWT
-  const { page = 1 } = req.query;
-  const pageSize = 15;
-  const offset = (page - 1) * pageSize;
-
   try {
-    const result = await pool.query(
-      `
-      SELECT 
-        p.*,
+    const userId = req.user.id;
+    const page = parseInt(req.query.page || "1", 10);
+    const limit = 12; // grid size
+    const offset = (page - 1) * limit;
+
+    const sql = `
+      SELECT
+        p.id,
+        p.post_type,
+        p.image_url,
+        p.caption,
+        p.created_at,
         u.first_name,
-        u.last_name,
-        u.profile,
-        u.course,
-        u.university,
-
-        -- count likes
-        COUNT(DISTINCT pl.id) AS like_count,
-
-        -- check if current user liked
-        BOOL_OR(pl.user_id = $1) AS liked_by_me,
-
-        -- check if current user saved
-        BOOL_OR(sp2.user_id = $1) AS saved_by_me,
-
-        -- collect list of liked users (limit 20)
-        COALESCE(
-          ARRAY_AGG(DISTINCT u2.first_name || ' ' || u2.last_name) 
-          FILTER (WHERE pl.user_id IS NOT NULL), 
-          '{}'
-        ) AS liked_users,
-
-        -- count comments
-        COUNT(DISTINCT c.id) AS comment_count
-
+        u.last_name
       FROM saved_posts sp
       JOIN posts p ON sp.post_id = p.id
       JOIN users u ON p.user_id = u.id
-      LEFT JOIN post_likes pl ON p.id = pl.post_id
-      LEFT JOIN users u2 ON pl.user_id = u2.id
-      LEFT JOIN comments c ON p.id = c.post_id
-      LEFT JOIN saved_posts sp2 ON p.id = sp2.post_id
+
+      -- 🔒 block checks
       WHERE sp.user_id = $1
-      GROUP BY p.id, u.id, sp.created_at
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE b.blocker_id = $1
+            AND b.blocked_id = p.user_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b2
+          WHERE b2.blocker_id = p.user_id
+            AND b2.blocked_id = $1
+        )
+
       ORDER BY sp.created_at DESC
       LIMIT $2 OFFSET $3;
-      `,
-      [userId, pageSize, offset]
+    `;
+
+    const result = await pool.query(sql, [userId, limit, offset]);
+
+    const posts = await Promise.all(
+      result.rows.map(async (post) => ({
+        ...post,
+        image_url: post.image_url
+          ? await generatePresignedUrl(post.image_url)
+          : null,
+      }))
     );
 
-    const posts = result.rows.map((post) => ({
-      ...post,
-      image_url: post.image_url ? generatePresignedUrl(post.image_url) : null,
-      user: {
-        first_name: post.first_name,
-        last_name: post.last_name,
-        avatar_url: post.profile ? generatePresignedUrl(post.profile) : null,
-        course: post.course,
-        university: post.university,
-      },
-      like_count: Number(post.like_count),
-      comment_count: Number(post.comment_count),
-      liked_by_me: post.liked_by_me,
-      saved_by_me: post.saved_by_me,
-      liked_users: post.liked_users,
-    }));
-
-    res.json({
-      posts,
-      hasMore: result.rows.length === pageSize,
-    });
+    res.json({ posts });
   } catch (err) {
     console.error("❌ Error fetching saved posts:", err);
     res.status(500).json({ error: "Failed to fetch saved posts" });
   }
 });
+
 
 // ✅ Get all posts of a user with pagination
 router.get("/activity", auth, async (req, res) => {
@@ -469,5 +449,8 @@ router.get("/profile/:userId", auth, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
+
+
 
 module.exports = router;

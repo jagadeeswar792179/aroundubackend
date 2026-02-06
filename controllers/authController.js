@@ -45,6 +45,30 @@ const registerUser = async (req, res) => {
       return res.status(400).json({ msg: "Email already registered" });
     }
 
+    // 🔒 Validate university + email domain (SOURCE OF TRUTH)
+if (!university) {
+  return res.status(400).json({ msg: "University is required" });
+}
+
+const uniResult = await query(
+  "SELECT domain FROM universities WHERE name = $1 LIMIT 1",
+  [university]
+);
+
+if (!uniResult.rows.length) {
+  return res.status(400).json({ msg: "Invalid university selected" });
+}
+
+const allowedDomain = uniResult.rows[0].domain.toLowerCase();
+const emailDomain = emailLower.split("@")[1];
+
+if (!emailDomain || emailDomain !== allowedDomain) {
+  return res.status(400).json({
+    msg: `Email must end with @${allowedDomain}`,
+  });
+}
+
+
     const hashed = await bcrypt.hash(password, 10);
 
     // 🔴 Make sure your users table has these columns:
@@ -135,6 +159,7 @@ const registerUser = async (req, res) => {
   }
 };
 
+
 // LOGIN CONTROLLER
 const loginUser = async (req, res) => {
   try {
@@ -168,21 +193,11 @@ const loginUser = async (req, res) => {
     }
 
     // 🔥 STORE FULL USER DATA IN TOKEN
-    const token = jwt.sign(
-      {
-        id: user.id,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        email: user.email,
-        user_type: user.user_type,
-        university: user.university,
-        course: user.course,
-        location: user.location,
-        profile: profileurl,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" } // token valid for 7 days
-    );
+    const token =  jwt.sign(
+  { id: user.id, user_type: user.user_type },
+  process.env.JWT_SECRET,
+  { expiresIn: "7d" }
+);
 
     res.json({
       token,
