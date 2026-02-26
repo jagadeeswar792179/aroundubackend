@@ -193,12 +193,16 @@ const loginUser = async (req, res) => {
     }
 
     // 🔥 STORE FULL USER DATA IN TOKEN
-    const token =  jwt.sign(
-  { id: user.id, user_type: user.user_type },
+const token = jwt.sign(
+  {
+    id: user.id,
+    user_type: user.user_type,
+    university: user.university,
+    course: user.course,
+  },
   process.env.JWT_SECRET,
   { expiresIn: "7d" }
 );
-
     res.json({
       token,
       user: {
