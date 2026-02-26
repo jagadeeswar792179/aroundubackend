@@ -31,7 +31,8 @@ const allowedOrigins = [
   "https://aroundu.me",
   "https://aroundu-admin.netlify.app",
   "capacitor://localhost",
-  "http://localhost"
+  "http://localhost",
+  "https://localhost",
 ];
 
 app.use(
@@ -61,7 +62,8 @@ const io = new Server(server, {
       "https://aroundu.me",
       "https://aroundu-admin.netlify.app",
       "capacitor://localhost",
-      "http://localhost"
+      "http://localhost",
+      "https://localhost",
     ],
     methods: ["GET", "POST"],
   },
