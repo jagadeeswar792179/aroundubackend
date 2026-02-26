@@ -24,27 +24,30 @@ const profileViewsRouter = require("./routes/profileViews");
 const bugReportsRouter = require("./routes/bugReports");
 const bookingRoutes = require("./routes/bookingRoutes");
 const lostfoundRoutes = require("./routes/lostfound");
+const moderationRoutes = require("./routes/moderationRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 const allowedOrigins = [
   "http://localhost:3000",
   "https://aroundu.me",
   "https://aroundu-admin.netlify.app",
+  "capacitor://localhost",
+  "http://localhost"
 ];
-const moderationRoutes = require("./routes/moderationRoutes");
-const adminRoutes = require("./routes/adminRoutes");
 
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // allow requests with no origin (like mobile apps or curl)
+    origin: function (origin, callback) {
+      // Allow mobile apps (no origin)
       if (!origin) return callback(null, true);
+
       if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
+        return callback(null, true);
       }
+
+      console.log("Blocked by CORS:", origin);
+      return callback(new Error("Not allowed by CORS"));
     },
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    credentials: true,
+    credentials: false, // you are NOT using cookies
   })
 );
 
@@ -53,12 +56,17 @@ app.use(express.json());
 // ---- create HTTP server and attach socket.io
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: "*" }, // in prod: set to your frontend origin
-  transports: ["websocket"], // prefer pure websockets
-  pingInterval: 20000,
-  pingTimeout: 20000,
+  cors: {
+    origin: [
+      "https://aroundu.me",
+      "https://aroundu-admin.netlify.app",
+      "capacitor://localhost",
+      "http://localhost"
+    ],
+    methods: ["GET", "POST"],
+  },
+  transports: ["websocket"],
 });
-
 // ---- sockets: each client joins a room with their userId
 io.on("connection", (socket) => {
   socket.on("join", (userId) => {
