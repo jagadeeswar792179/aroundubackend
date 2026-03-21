@@ -10,8 +10,8 @@ const registerUser = async (req, res) => {
     const body = req.body || {};
 
     // Support both camelCase and snake_case from frontend
-    const firstName = (body.firstName || body.first_name || "").trim();
-    const lastName = (body.lastName || body.last_name || "").trim();
+let firstName = (body.firstName || body.first_name || "").trim();
+let lastName = (body.lastName || body.last_name || "").trim();
     const email = (body.email || "").trim();
     const password = body.password || "";
     const gender = body.gender || "";
@@ -50,23 +50,23 @@ if (!university) {
   return res.status(400).json({ msg: "University is required" });
 }
 
-const uniResult = await query(
-  "SELECT domain FROM universities WHERE name = $1 LIMIT 1",
-  [university]
-);
+// const uniResult = await query(
+//   "SELECT domain FROM universities WHERE name = $1 LIMIT 1",
+//   [university]
+// );
 
-if (!uniResult.rows.length) {
-  return res.status(400).json({ msg: "Invalid university selected" });
-}
+// if (!uniResult.rows.length) {
+//   return res.status(400).json({ msg: "Invalid university selected" });
+// }
 
-const allowedDomain = uniResult.rows[0].domain.toLowerCase();
-const emailDomain = emailLower.split("@")[1];
+// const allowedDomain = uniResult.rows[0].domain.toLowerCase();
+// const emailDomain = emailLower.split("@")[1];
 
-if (!emailDomain || emailDomain !== allowedDomain) {
-  return res.status(400).json({
-    msg: `Email must end with @${allowedDomain}`,
-  });
-}
+// if (!emailDomain || emailDomain !== allowedDomain) {
+//   return res.status(400).json({
+//     msg: `Email must end with @${allowedDomain}`,
+//   });
+// }
 
 
     const hashed = await bcrypt.hash(password, 10);
@@ -131,6 +131,7 @@ if (!emailDomain || emailDomain !== allowedDomain) {
         id: user.id,
         university: user.university,
         course: user.course,
+        user_type:user.user_type,
       },
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
@@ -139,17 +140,17 @@ if (!emailDomain || emailDomain !== allowedDomain) {
     return res.status(201).json({
       msg: "User registered",
       token,
-      user: {
-        id: user.id,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        email: user.email,
-        university: user.university,
-        course: user.course,
-        user_type: user.user_type,
-        blog_link: user.blog_link,
-        verified: user.verified,
-      },
+      // user: {
+      //   id: user.id,
+      //   first_name: user.first_name,
+      //   last_name: user.last_name,
+      //   email: user.email,
+      //   university: user.university,
+      //   course: user.course,
+      //   user_type: user.user_type,
+      //   blog_link: user.blog_link,
+      //   verified: user.verified,
+      // },
     });
   } catch (err) {
     console.error("Register error:", err);

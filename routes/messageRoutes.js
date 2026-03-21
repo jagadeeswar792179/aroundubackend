@@ -22,6 +22,13 @@ module.exports = (io) => {
 
   // E) mark messages from peer as seen
   router.post("/:conversationId/seen", verifyToken, ctrl.markSeen);
+router.post("/group", verifyToken, ctrl.createGroup);
 
+router.delete("/message/:messageId", verifyToken, ctrl.deleteMessage);
+
+router.post("/:conversationId/leave", verifyToken, ctrl.leaveGroup);
+router.post("/:conversationId/add-members", verifyToken, ctrl.addMembers);
+router.delete("/:conversationId/remove-member/:userId", verifyToken, ctrl.removeMember);
+router.get("/:conversationId/members", verifyToken, ctrl.getGroupMembers);
   return router;
 };

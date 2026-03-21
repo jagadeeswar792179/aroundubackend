@@ -394,4 +394,88 @@ router.get("/people", auth, async (req, res) => {
   }
 });
 
+// GET /api/explore/clubs?page=1&same_university=true|false
+router.get("/clubs", auth, async (req, res) => {
+  try {
+    const PAGE_SIZE = 4;
+    const MAX_TOTAL = 20;
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const sameUniversity = req.query.same_university === "true";
+
+    const offset = (page - 1) * PAGE_SIZE;
+    const remaining = Math.max(0, MAX_TOTAL - offset);
+    const limit = Math.min(PAGE_SIZE, remaining);
+
+    const meId = req.user.id;
+
+    const uRes = await pool.query(
+      "SELECT university FROM users WHERE id = $1 LIMIT 1",
+      [meId]
+    );
+
+    const myUniversity =
+      typeof uRes.rows?.[0]?.university === "string"
+        ? uRes.rows[0].university.trim()
+        : null;
+
+    let sql;
+    let params;
+
+    if (sameUniversity && myUniversity) {
+      sql = `
+        SELECT id, first_name, last_name, profile AS profile_key, university
+        FROM users
+        WHERE user_type = 'club'
+          AND university = $1
+        ORDER BY created_at DESC
+        OFFSET $2 LIMIT $3
+      `;
+
+      params = [myUniversity, offset, limit];
+    } else {
+      sql = `
+        SELECT id, first_name, last_name, profile AS profile_key, university
+        FROM users
+        WHERE user_type = 'club'
+        ORDER BY created_at DESC
+        OFFSET $1 LIMIT $2
+      `;
+
+      params = [offset, limit];
+    }
+
+    const dataRes = await pool.query(sql, params);
+    const rows = dataRes.rows || [];
+
+    const presigned = await Promise.all(
+      rows.map(async (r) => {
+        try {
+          return r.profile_key
+            ? await generatePresignedUrl(r.profile_key)
+            : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    const clubs = rows.map((r, idx) => ({
+      id: r.id,
+      first_name: r.first_name,
+      last_name: r.last_name,
+      avatar_url: presigned[idx],
+      university: r.university,
+    }));
+
+    res.json({
+      clubs,
+      hasMore: clubs.length === PAGE_SIZE,
+    });
+
+  } catch (err) {
+    console.error("❌ explore/clubs error:", err);
+    res.status(500).json({ error: "Failed to fetch clubs" });
+  }
+});
 module.exports = router;

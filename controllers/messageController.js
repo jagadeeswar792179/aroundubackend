@@ -8,47 +8,82 @@ module.exports = (io) => {
       try {
         const me = req.user.id;
         const q = `
-          WITH my_convos AS (
-            SELECT c.id,
-                   CASE WHEN c.user1_id = $1 THEN c.user2_id ELSE c.user1_id END AS peer_id,
-                   c.last_message_id,
-                   c.last_message_at
-            FROM conversations c
-          WHERE (c.user1_id = $1 OR c.user2_id = $1)
-      AND NOT EXISTS (
-        SELECT 1 FROM blocks b
-        WHERE b.blocker_id = $1
-          AND b.blocked_id = CASE WHEN c.user1_id = $1 THEN c.user2_id ELSE c.user1_id END
-      )
-  ),
-          last_msg AS (
-            SELECT m.id, m.conversation_id, m.body, m.sender_id, m.created_at
-            FROM messages m
-            WHERE m.id IN (SELECT last_message_id FROM my_convos WHERE last_message_id IS NOT NULL)
-          ),
-          unread AS (
-            SELECT conversation_id, COUNT(*) AS unread_count
-            FROM messages
-            WHERE conversation_id IN (SELECT id FROM my_convos)
-              AND sender_id <> $1
-              AND seen = false
-            GROUP BY conversation_id
-          )
-          SELECT mc.id AS conversation_id,
-                 u.id   AS peer_id,
-                 u.first_name, u.last_name, u.email,
-                 u.profile,  -- profile key
-                 lm.body AS last_message,
-                 lm.sender_id AS last_sender_id,
-                 mc.last_message_at,
-                 COALESCE(ur.unread_count, 0) AS unread_count
-          FROM my_convos mc
-          JOIN users u ON u.id = mc.peer_id
-          LEFT JOIN last_msg lm ON lm.conversation_id = mc.id
-          LEFT JOIN unread ur ON ur.conversation_id = mc.id
-          ORDER BY mc.last_message_at DESC NULLS LAST
-          LIMIT 50;
-        `;
+WITH my_convos AS (
+  SELECT c.id,
+         c.type,
+         c.title,
+         c.last_message_id,
+         c.last_message_at
+  FROM conversations c
+  JOIN conversation_members cm
+    ON cm.conversation_id = c.id
+  WHERE cm.user_id = $1
+),
+
+peer AS (
+  SELECT
+    cm.conversation_id,
+    u.id AS peer_id,
+    u.first_name,
+    u.last_name,
+    u.email,
+    u.profile
+  FROM conversation_members cm
+  JOIN users u ON u.id = cm.user_id
+  WHERE cm.user_id <> $1
+),
+
+last_msg AS (
+  SELECT m.id, m.conversation_id, m.body, m.sender_id, m.created_at
+  FROM messages m
+  WHERE m.id IN (
+    SELECT last_message_id
+    FROM my_convos
+    WHERE last_message_id IS NOT NULL
+  )
+),
+
+unread AS (
+  SELECT conversation_id, COUNT(*) AS unread_count
+  FROM messages
+  WHERE conversation_id IN (SELECT id FROM my_convos)
+    AND sender_id <> $1
+    AND seen = false
+  GROUP BY conversation_id
+)
+
+SELECT DISTINCT ON (mc.id)
+  mc.id AS conversation_id,
+  mc.type,
+  mc.title,
+
+  p.peer_id,
+  p.first_name,
+  p.last_name,
+  p.email,
+  p.profile,
+
+  lm.body AS last_message,
+  lm.sender_id AS last_sender_id,
+  mc.last_message_at,
+
+  COALESCE(ur.unread_count,0) AS unread_count,
+
+  -- ⭐ member count
+  (
+    SELECT COUNT(*)
+    FROM conversation_members
+    WHERE conversation_id = mc.id
+  ) AS member_count
+
+FROM my_convos mc
+LEFT JOIN peer p ON p.conversation_id = mc.id
+LEFT JOIN last_msg lm ON lm.conversation_id = mc.id
+LEFT JOIN unread ur ON ur.conversation_id = mc.id
+
+ORDER BY mc.id, mc.last_message_at DESC NULLS LAST
+LIMIT 50;
+`;
         const { rows } = await pool.query(q, [me]);
 
         const dataWithProfile = rows.map((r) => ({
@@ -64,6 +99,41 @@ module.exports = (io) => {
       }
     },
 
+    createGroup: async (req, res) => {
+      try {
+        const me = req.user.id;
+        const { title, members } = req.body;
+
+        if (!title || !members || members.length === 0) {
+          return res.status(400).json({ msg: "Invalid group data" });
+        }
+
+        // create group conversation
+        const convo = await pool.query(
+          `INSERT INTO conversations(type,title,created_by)
+       VALUES('group',$1,$2)
+       RETURNING id`,
+          [title, me],
+        );
+
+        const conversationId = convo.rows[0].id;
+
+        const allMembers = [...new Set([me, ...members])];
+
+        for (const userId of allMembers) {
+          await pool.query(
+            `INSERT INTO conversation_members(conversation_id,user_id,role)
+     VALUES($1,$2,$3)`,
+            [conversationId, userId, userId === me ? "admin" : "member"],
+          );
+        }
+
+        res.json({ conversation_id: conversationId });
+      } catch (e) {
+        console.error("createGroup error:", e);
+        res.status(500).json({ error: e.message });
+      }
+    },
     // B) Ensure conversation between me and peer exists; return id
     ensureConversation: async (req, res) => {
       try {
@@ -76,14 +146,14 @@ module.exports = (io) => {
         const found = await pool.query(
           `SELECT id FROM conversations
            WHERE (user1_id=$1 AND user2_id=$2) OR (user1_id=$2 AND user2_id=$1)`,
-          [me, peerId]
+          [me, peerId],
         );
         if (found.rows.length) return res.json(found.rows[0]);
 
         const created = await pool.query(
           `INSERT INTO conversations(user1_id, user2_id)
            VALUES ($1,$2) RETURNING id`,
-          [me, peerId]
+          [me, peerId],
         );
         res.status(201).json(created.rows[0]);
       } catch (e) {
@@ -100,18 +170,23 @@ module.exports = (io) => {
         const { conversationId } = req.params;
         const { before } = req.query;
 
-        const ok = await pool.query(
-          `SELECT 1 FROM conversations
-           WHERE id=$1 AND (user1_id=$2 OR user2_id=$2)`,
-          [conversationId, me]
+        const member = await pool.query(
+          `SELECT 1
+   FROM conversation_members
+   WHERE conversation_id=$1
+   AND user_id=$2`,
+          [conversationId, me],
         );
-        if (!ok.rows.length)
+
+        if (!member.rows.length) {
           return res.status(403).json({ msg: "Not in conversation" });
+        }
 
         const params = [conversationId];
         let q = `
-          SELECT m.id, m.sender_id, m.body, m.created_at, m.seen,
-                 u.profile AS sender_profile
+          SELECT m.id, m.sender_id, m.body, m.created_at, m.seen,m.deleted,
+                 u.profile AS sender_profile,u.first_name,
+       u.last_name
           FROM messages m
           JOIN users u ON m.sender_id = u.id
           WHERE m.conversation_id=$1
@@ -129,6 +204,8 @@ module.exports = (io) => {
           sender_profile: m.sender_profile
             ? generatePresignedUrl(m.sender_profile)
             : null,
+          first_name: m.first_name,
+          last_name: m.last_name,
         }));
 
         res.json(messagesWithProfile);
@@ -146,36 +223,42 @@ module.exports = (io) => {
         if (!body?.trim())
           return res.status(400).json({ msg: "Empty message" });
 
-        const conv = await pool.query(
-          `SELECT user1_id, user2_id FROM conversations WHERE id=$1`,
-          [conversationId]
+        const members = await pool.query(
+          `SELECT user_id
+   FROM conversation_members
+   WHERE conversation_id=$1`,
+          [conversationId],
         );
-        if (!conv.rows.length)
-          return res.status(404).json({ msg: "Conversation not found" });
-        const { user1_id, user2_id } = conv.rows[0];
-        if (![user1_id, user2_id].includes(me))
+
+        const memberIds = members.rows.map((r) => r.user_id);
+
+        if (!memberIds.includes(me)) {
           return res.status(403).json({ msg: "Not in conversation" });
-        const peerId = me === user1_id ? user2_id : user1_id;
+        }
 
         // insert message
         const ins = await pool.query(
           `INSERT INTO messages (conversation_id, sender_id, body)
            VALUES ($1, $2, $3)
            RETURNING *;`,
-          [conversationId, me, body.trim()]
+          [conversationId, me, body.trim()],
         );
         const msg = ins.rows[0];
 
         // fetch sender profile
         const sender = await pool.query(
-          `SELECT profile FROM users WHERE id=$1`,
-          [me]
+          `SELECT profile, first_name, last_name
+   FROM users
+   WHERE id=$1`,
+          [me],
         );
         const msgWithProfile = {
           ...msg,
           sender_profile: sender.rows[0].profile
             ? generatePresignedUrl(sender.rows[0].profile)
             : null,
+          first_name: sender.rows[0].first_name,
+          last_name: sender.rows[0].last_name,
         };
 
         // update conversation last_message fields
@@ -184,13 +267,16 @@ module.exports = (io) => {
            SET last_message_id = $2,
                last_message_at = $3
            WHERE id=$1`,
-          [conversationId, msg.id, msg.created_at]
+          [conversationId, msg.id, msg.created_at],
         );
 
-        // emit real-time
-        io.to(peerId).emit("message:new", {
-          ...msgWithProfile,
-          conversation_id: conversationId,
+        memberIds.forEach((uid) => {
+          if (uid !== me) {
+            io.to(uid).emit("message:new", {
+              ...msgWithProfile,
+              conversation_id: conversationId,
+            });
+          }
         });
 
         res
@@ -201,6 +287,57 @@ module.exports = (io) => {
       }
     },
 
+    deleteMessage: async (req, res) => {
+      try {
+        const me = req.user.id;
+        const { messageId } = req.params;
+
+        // get message info
+        const msg = await pool.query(
+          `SELECT sender_id, conversation_id
+       FROM messages
+       WHERE id=$1`,
+          [messageId],
+        );
+
+        if (!msg.rows.length) {
+          return res.status(404).json({ msg: "Message not found" });
+        }
+
+        const { sender_id, conversation_id } = msg.rows[0];
+
+        // check if user is admin in group
+        const role = await pool.query(
+          `SELECT role
+   FROM conversation_members
+   WHERE conversation_id=$1
+   AND user_id=$2`,
+          [conversation_id, me],
+        );
+
+        const userRole = role.rows[0]?.role;
+
+        // allow if sender OR admin
+        if (sender_id !== me && userRole !== "admin") {
+          return res
+            .status(403)
+            .json({ msg: "Not allowed to delete this message" });
+        }
+
+        // soft delete message
+        await pool.query(
+          `UPDATE messages
+       SET deleted = true,
+           deleted_by = $2
+       WHERE id = $1`,
+          [messageId, me],
+        );
+
+        res.json({ success: true });
+      } catch (e) {
+        res.status(500).json({ msg: "deleteMessage failed", error: e.message });
+      }
+    },
     // E) Mark messages from peer as seen
     markSeen: async (req, res) => {
       try {
@@ -210,11 +347,217 @@ module.exports = (io) => {
           `UPDATE messages
            SET seen = true
            WHERE conversation_id=$1 AND sender_id <> $2 AND seen = false`,
-          [conversationId, me]
+          [conversationId, me],
         );
         res.json({ msg: "seen updated" });
       } catch (e) {
         res.status(500).json({ msg: "markSeen failed", error: e.message });
+      }
+    },
+    leaveGroup: async (req, res) => {
+      try {
+        const me = req.user.id;
+        const { conversationId } = req.params;
+
+        // check membership
+        const member = await pool.query(
+          `SELECT role
+       FROM conversation_members
+       WHERE conversation_id=$1
+       AND user_id=$2`,
+          [conversationId, me],
+        );
+
+        if (!member.rows.length) {
+          return res.status(403).json({ msg: "Not a group member" });
+        }
+
+        const role = member.rows[0].role;
+
+        // remove user
+        await pool.query(
+          `DELETE FROM conversation_members
+       WHERE conversation_id=$1
+       AND user_id=$2`,
+          [conversationId, me],
+        );
+
+        // if admin left → assign new admin
+        if (role === "admin") {
+          const nextAdmin = await pool.query(
+            `SELECT user_id
+         FROM conversation_members
+         WHERE conversation_id=$1
+         ORDER BY joined_at ASC
+         LIMIT 1`,
+            [conversationId],
+          );
+
+          if (nextAdmin.rows.length > 0) {
+            await pool.query(
+              `UPDATE conversation_members
+           SET role='admin'
+           WHERE conversation_id=$1
+           AND user_id=$2`,
+              [conversationId, nextAdmin.rows[0].user_id],
+            );
+          }
+        }
+
+        res.json({ success: true });
+      } catch (e) {
+        res.status(500).json({ msg: "leaveGroup failed", error: e.message });
+      }
+    },
+    addMembers: async (req, res) => {
+      try {
+        const me = req.user.id;
+        const { conversationId } = req.params;
+        const { members } = req.body;
+
+        if (!members || !members.length) {
+          return res.status(400).json({ msg: "No members provided" });
+        }
+
+        // check if user is admin
+        const role = await pool.query(
+          `SELECT role
+       FROM conversation_members
+       WHERE conversation_id=$1
+       AND user_id=$2`,
+          [conversationId, me],
+        );
+
+        if (!role.rows.length || role.rows[0].role !== "admin") {
+          return res.status(403).json({ msg: "Only admin can add members" });
+        }
+
+        // insert new members
+        for (const userId of members) {
+          await pool.query(
+            `INSERT INTO conversation_members (conversation_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+            [conversationId, userId],
+          );
+        }
+
+        res.json({ success: true });
+      } catch (e) {
+        res.status(500).json({ msg: "addMembers failed", error: e.message });
+      }
+    },
+
+    removeMember: async (req, res) => {
+      try {
+        const me = req.user.id;
+        const { conversationId, userId } = req.params;
+
+        // check if requester is admin
+        const role = await pool.query(
+          `SELECT role
+       FROM conversation_members
+       WHERE conversation_id=$1
+       AND user_id=$2`,
+          [conversationId, me],
+        );
+
+        if (!role.rows.length || role.rows[0].role !== "admin") {
+          return res.status(403).json({ msg: "Only admin can remove members" });
+        }
+
+        // prevent admin removing himself here
+        if (me === userId) {
+          return res.status(400).json({ msg: "Use leave group instead" });
+        }
+
+        // remove the member
+        await pool.query(
+          `DELETE FROM conversation_members
+       WHERE conversation_id=$1
+       AND user_id=$2`,
+          [conversationId, userId],
+        );
+
+        res.json({ success: true });
+      } catch (e) {
+        res.status(500).json({ msg: "removeMember failed", error: e.message });
+      }
+    },
+    getGroupMembers: async (req, res) => {
+      try {
+        const me = req.user.id;
+        const { conversationId } = req.params;
+        const { q = "", page = 1 } = req.query;
+
+        const limit = 10;
+        const offset = (page - 1) * limit;
+
+        // ensure requester is member
+        const memberCheck = await pool.query(
+          `SELECT 1
+       FROM conversation_members
+       WHERE conversation_id=$1
+       AND user_id=$2`,
+          [conversationId, me],
+        );
+
+        if (!memberCheck.rows.length) {
+          return res.status(403).json({ msg: "Not allowed" });
+        }
+
+        const params = [conversationId];
+        let idx = 2;
+
+        let search = "";
+
+        if (q.trim()) {
+          search = `AND (
+        LOWER(u.first_name) LIKE LOWER($${idx})
+        OR LOWER(u.last_name) LIKE LOWER($${idx})
+      )`;
+          params.push(`%${q}%`);
+          idx++;
+        }
+
+        params.push(limit);
+        params.push(offset);
+
+        const members = await pool.query(
+          `
+      SELECT
+        u.id,
+        u.first_name,
+        u.last_name,
+        u.profile,
+        cm.role,
+        cm.joined_at
+      FROM conversation_members cm
+      JOIN users u ON u.id = cm.user_id
+      WHERE cm.conversation_id=$1
+      AND cm.role != 'admin'
+      ${search}
+      ORDER BY cm.joined_at ASC
+      LIMIT $${idx} OFFSET $${idx + 1}
+      `,
+          params,
+        );
+
+        const data = members.rows.map((m) => ({
+          ...m,
+          profile: m.profile ? generatePresignedUrl(m.profile) : null,
+        }));
+
+        res.json({
+          members: data,
+          page: Number(page),
+          count: data.length,
+        });
+      } catch (e) {
+        res.status(500).json({
+          msg: "getGroupMembers failed",
+          error: e.message,
+        });
       }
     },
   };

@@ -18,6 +18,7 @@ const messageRoutesFactory = require("./routes/messageRoutes"); // will receive 
 const testUserRoutes = require("./routes/testUserRoutes");
 const postRoutes = require("./routes/postRoutes");
 const marketplaceRoutes = require("./routes/marketplaceRoutes");
+const settingRoutes = require("./routes/settingsRoutes");
 
 const app = express();
 const profileViewsRouter = require("./routes/profileViews");
@@ -90,6 +91,7 @@ app.use("/api/lostfound", lostfoundRoutes); // <-- add this here
 // ---- REST routes
 app.use("/api", bookingRoutes);
 app.use("/api/moderation", moderationRoutes);
+app.use("/api/settings", settingRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/AuthOtp", otpRoutes);

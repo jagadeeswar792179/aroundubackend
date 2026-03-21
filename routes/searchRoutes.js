@@ -339,5 +339,63 @@ router.get("/posts", auth, async (req, res) => {
     return res.status(500).json({ error: "Search failed" });
   }
 });
+/**
+ * GET /api/search/clubs?q=...&page=1
+ */
 
+router.get("/clubs", auth, async (req, res) => {
+  try {
+    const rawQ = (req.query.q || "").toString().trim();
+    if (!rawQ) return res.json({ results: [] });
+
+    const { offset, pageSize } = parsePage(req.query);
+    const queryLike = `%${rawQ}%`;
+    const meId = req.user.id;
+
+    const sql = `
+      SELECT id, first_name, last_name, university, profile
+      FROM users
+      WHERE user_type = 'club'
+        AND (
+          first_name ILIKE $1 OR
+          university ILIKE $1
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM blocks b
+          WHERE b.blocker_id = users.id
+            AND b.blocked_id = $2
+        )
+      ORDER BY created_at DESC
+      OFFSET $3 LIMIT $4
+    `;
+
+    const dbRes = await pool.query(sql, [queryLike, meId, offset, pageSize]);
+
+    const clubs = await Promise.all(
+      dbRes.rows.map(async (club) => {
+        let avatarUrl = null;
+
+        try {
+          avatarUrl = club.profile
+            ? await generatePresignedUrl(club.profile)
+            : null;
+        } catch {
+          avatarUrl = null;
+        }
+
+        return {
+          ...club,
+          avatar_url: avatarUrl,
+        };
+      })
+    );
+
+    res.json({ results: clubs });
+
+  } catch (err) {
+    console.error("❌ /api/search/clubs failed:", err);
+    res.status(500).json({ error: "Search failed" });
+  }
+});
 module.exports = router;
