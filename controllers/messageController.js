@@ -139,27 +139,49 @@ LIMIT 50;
       try {
         const me = req.user.id;
         const { peerId } = req.body;
+
         if (!peerId || peerId === me) {
           return res.status(400).json({ msg: "Invalid peerId" });
         }
 
+        // 1️⃣ Check if conversation exists
         const found = await pool.query(
           `SELECT id FROM conversations
-           WHERE (user1_id=$1 AND user2_id=$2) OR (user1_id=$2 AND user2_id=$1)`,
+       WHERE (user1_id=$1 AND user2_id=$2)
+          OR (user1_id=$2 AND user2_id=$1)`,
           [me, peerId],
         );
-        if (found.rows.length) return res.json(found.rows[0]);
 
-        const created = await pool.query(
-          `INSERT INTO conversations(user1_id, user2_id)
-           VALUES ($1,$2) RETURNING id`,
-          [me, peerId],
+        let conversationId;
+
+        if (found.rows.length) {
+          conversationId = found.rows[0].id;
+        } else {
+          // 2️⃣ Create new conversation
+          const created = await pool.query(
+            `INSERT INTO conversations(user1_id, user2_id)
+         VALUES ($1,$2)
+         RETURNING id`,
+            [me, peerId],
+          );
+
+          conversationId = created.rows[0].id;
+        }
+
+        // 3️⃣ 🔥 IMPORTANT: ensure members exist
+        await pool.query(
+          `INSERT INTO conversation_members(conversation_id, user_id)
+       VALUES ($1,$2), ($1,$3)
+       ON CONFLICT DO NOTHING`,
+          [conversationId, me, peerId],
         );
-        res.status(201).json(created.rows[0]);
+
+        return res.json({ id: conversationId });
       } catch (e) {
-        res
-          .status(500)
-          .json({ msg: "ensureConversation failed", error: e.message });
+        res.status(500).json({
+          msg: "ensureConversation failed",
+          error: e.message,
+        });
       }
     },
 
