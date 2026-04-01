@@ -27,6 +27,7 @@ const bookingRoutes = require("./routes/bookingRoutes");
 const lostfoundRoutes = require("./routes/lostfound");
 const moderationRoutes = require("./routes/moderationRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
 const allowedOrigins = [
   "http://localhost:3000",
   "https://aroundu.me",
@@ -50,13 +51,14 @@ app.use(
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: false, // you are NOT using cookies
-  })
+  }),
 );
 
 app.use(express.json());
 
 // ---- create HTTP server and attach socket.io
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: {
     origin: [
@@ -70,17 +72,17 @@ const io = new Server(server, {
   },
   transports: ["websocket"],
 });
-// ---- sockets: each client joins a room with their userId
-io.on("connection", (socket) => {
-  socket.on("join", (userId) => {
-    if (userId) {
-      socket.join(userId); // now io.to(userId).emit(...) will DM that user
-    }
-  });
 
-  socket.on("disconnect", () => {
-    // optional: presence cleanup later
-  });
+app.set("io", io);
+io.on("connection", (socket) => {
+  const userId = socket.handshake.auth?.userId;
+
+  if (userId) {
+    socket.join(userId); // 🔥 AUTO JOIN
+    console.log("User auto joined:", userId);
+  }
+
+  socket.on("disconnect", () => {});
 });
 app.use("/api/universities", require("./routes/universities"));
 app.use("/api/marketplace", marketplaceRoutes);
@@ -102,8 +104,8 @@ app.use("/api/explore", exploreRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/profile-views", profileViewsRouter);
 app.use("/api/bug-reports", bugReportsRouter);
-
+app.use("/api/notifications", notificationRoutes);
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () =>
-  console.log(`Server + Socket.IO running on port ${PORT}`)
+  console.log(`Server + Socket.IO running on port ${PORT}`),
 );

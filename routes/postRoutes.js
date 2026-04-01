@@ -70,7 +70,7 @@ router.post("/upload", auth, upload.single("image"), async (req, res) => {
     const userRes = await pool.query(
       `SELECT id, first_name, last_name, profile, course, university, user_type
        FROM users WHERE id = $1`,
-      [userId]
+      [userId],
     );
     const userRow = userRes.rows[0];
 
@@ -133,8 +133,8 @@ router.post("/discussion", auth, async (req, res) => {
     const tagsArray = Array.isArray(tags)
       ? tags.slice(0, 7)
       : typeof tags === "string"
-      ? JSON.parse(tags).slice(0, 7)
-      : [];
+        ? JSON.parse(tags).slice(0, 7)
+        : [];
 
     // validate content
     if (
@@ -167,7 +167,7 @@ router.post("/discussion", auth, async (req, res) => {
     const userRes = await pool.query(
       `SELECT id, first_name, last_name, profile, course, university, user_type
        FROM users WHERE id = $1`,
-      [userId]
+      [userId],
     );
     const userRow = userRes.rows[0];
 
@@ -285,7 +285,7 @@ async function mapPosts(rows, loggedInUserId) {
           role: post.user_type, // <-- enum from DB: 'student' | 'professor'
         },
       };
-    })
+    }),
   );
 }
 
@@ -306,7 +306,7 @@ router.get("/feed/all", auth, async (req, res) => {
     // get requester's university to allow university-visibility posts
     const meRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
-      [currentUserId]
+      [currentUserId],
     );
     const requesterUniversity = meRes.rows[0]?.university || null;
 
@@ -385,7 +385,7 @@ router.get("/feed/all", auth, async (req, res) => {
   } catch (err) {
     console.error(
       "❌ Failed to fetch feed (all):",
-      err && err.stack ? err.stack : err
+      err && err.stack ? err.stack : err,
     );
     res.status(500).json({ error: "Failed to load posts" });
   }
@@ -407,7 +407,7 @@ router.get("/feed/interests", auth, async (req, res) => {
     // fetch current user interests
     const intRes = await pool.query(
       `SELECT interests FROM users WHERE id = $1 LIMIT 1`,
-      [currentUserId]
+      [currentUserId],
     );
     const interests = intRes.rows[0]?.interests || [];
     if (!Array.isArray(interests) || interests.length === 0) {
@@ -417,7 +417,7 @@ router.get("/feed/interests", auth, async (req, res) => {
     // fetch requester university (for visibility)
     const meRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
-      [currentUserId]
+      [currentUserId],
     );
     const requesterUniversity = meRes.rows[0]?.university || null;
 
@@ -493,7 +493,7 @@ router.get("/feed/interests", auth, async (req, res) => {
   } catch (err) {
     console.error(
       "❌ Failed to fetch interests feed:",
-      err && err.stack ? err.stack : err
+      err && err.stack ? err.stack : err,
     );
     res.status(500).json({ error: "Failed to load posts" });
   }
@@ -516,7 +516,7 @@ router.get("/feed/university", auth, async (req, res) => {
     // fetch requester's university
     const meRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
-      [currentUserId]
+      [currentUserId],
     );
     const requesterUniversity = meRes.rows[0]?.university || null;
 
@@ -589,7 +589,7 @@ router.get("/feed/university", auth, async (req, res) => {
   } catch (err) {
     console.error(
       "❌ Failed to fetch university feed:",
-      err && err.stack ? err.stack : err
+      err && err.stack ? err.stack : err,
     );
     res.status(500).json({ error: "Failed to load university posts" });
   }
@@ -615,7 +615,7 @@ router.get("/feed/course", auth, async (req, res) => {
 
     const meRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
-      [currentUserId]
+      [currentUserId],
     );
     const requesterUniversity = meRes.rows[0]?.university || null;
 
@@ -673,7 +673,7 @@ router.get("/feed/course", auth, async (req, res) => {
   } catch (err) {
     console.error(
       "❌ Failed to fetch course feed:",
-      err && err.stack ? err.stack : err
+      err && err.stack ? err.stack : err,
     );
     res.status(500).json({ error: "Failed to load course posts" });
   }
@@ -695,7 +695,7 @@ router.get("/tag/:tag", auth, async (req, res) => {
 
     const meRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
-      [currentUserId]
+      [currentUserId],
     );
     const requesterUniversity = meRes.rows[0]?.university || null;
 
@@ -772,7 +772,7 @@ router.get("/tag/:tag", auth, async (req, res) => {
   } catch (err) {
     console.error(
       "❌ Failed to fetch posts by tag:",
-      err && err.stack ? err.stack : err
+      err && err.stack ? err.stack : err,
     );
     return res.status(500).json({ error: "Failed to load posts for tag" });
   }
@@ -794,9 +794,9 @@ router.get("/tag/:tag", auth, async (req, res) => {
 //       users.course,
 //       users.university,
 //       users.user_type,
-//       (SELECT status FROM follow_requests 
+//       (SELECT status FROM follow_requests
 //         WHERE requester_id = $3 AND target_id = posts.user_id LIMIT 1) AS my_follow_status,
-//       (SELECT status FROM follow_requests 
+//       (SELECT status FROM follow_requests
 //         WHERE requester_id = posts.user_id AND target_id = $3 LIMIT 1) AS incoming_follow_status,
 //       COUNT(DISTINCT pl.id) AS like_count,
 //       BOOL_OR(pl.user_id = $3) AS liked_by_me,
@@ -824,10 +824,7 @@ router.get("/tag/:tag", auth, async (req, res) => {
 //   res.json({ posts });
 // });
 
-
-
 // GET single post by ID (full post, feed-style)
-
 
 router.get("/:postId", auth, async (req, res) => {
   try {
@@ -914,7 +911,7 @@ router.post("/:postId/comments", auth, async (req, res) => {
       `INSERT INTO comments (post_id, user_id, content)
        VALUES ($1, $2, $3)
        RETURNING id, content, created_at`,
-      [postId, userId, content]
+      [postId, userId, content],
     );
 
     const commentRow = insertResult.rows[0];
@@ -922,27 +919,33 @@ router.post("/:postId/comments", auth, async (req, res) => {
     // Fetch commenter info
     const userResult = await pool.query(
       `SELECT first_name, last_name, profile FROM users WHERE id = $1`,
-      [userId]
+      [userId],
     );
     const user = userResult.rows[0];
 
     // Notify the post owner (if not self)
     const postOwnerRes = await pool.query(
       "SELECT user_id FROM posts WHERE id = $1 LIMIT 1",
-      [postId]
+      [postId],
     );
     const postOwner = postOwnerRes.rows[0]?.user_id;
     const io = req.app && req.app.get && req.app.get("io");
 
     if (postOwner && postOwner !== userId) {
       try {
+        const actorName = `${user.first_name} ${user.last_name}`;
         await notify(io, {
           toUserId: postOwner,
           actorId: userId,
           type: "comment",
           entityId: commentRow.id,
           entityType: "comment",
-          data: { postId, commentText: commentRow.content },
+          data: {
+            actorName,
+            message: "commented on your post",
+            postId,
+            commentText: commentRow.content,
+          },
         });
       } catch (err) {
         console.warn("notify comment -> owner failed", err && err.message);
@@ -953,7 +956,7 @@ router.post("/:postId/comments", auth, async (req, res) => {
     try {
       const recentCommentersRes = await pool.query(
         `SELECT DISTINCT user_id FROM comments WHERE post_id = $1 AND user_id <> $2 LIMIT 5`,
-        [postId, userId]
+        [postId, userId],
       );
       for (const r of recentCommentersRes.rows) {
         const recip = r.user_id;
@@ -971,7 +974,7 @@ router.post("/:postId/comments", auth, async (req, res) => {
           console.warn(
             "notify comment -> recent commenter failed",
             recip,
-            err && err.message
+            err && err.message,
           );
         }
       }
@@ -1028,7 +1031,7 @@ router.get("/:postId/comments", auth, async (req, res) => {
       ORDER BY c.created_at DESC
       OFFSET $2::bigint LIMIT $3::bigint
       `,
-      [postId, offset, pageSize, userId]
+      [postId, offset, pageSize, userId],
     );
 
     const comments = await Promise.all(
@@ -1045,14 +1048,14 @@ router.get("/:postId/comments", auth, async (req, res) => {
             ? await generatePresignedUrl(row.profile)
             : null,
         },
-      }))
+      })),
     );
 
     res.json({ comments });
   } catch (err) {
     console.error(
       "❌ Failed to fetch paginated comments",
-      err && err.stack ? err.stack : err
+      err && err.stack ? err.stack : err,
     );
     res.status(500).json({ error: "Failed to fetch comments" });
   }
@@ -1068,36 +1071,68 @@ router.patch("/:id/like", auth, async (req, res) => {
 
     const existing = await pool.query(
       "SELECT id FROM post_likes WHERE post_id = $1 AND user_id = $2",
-      [postId, userId]
+      [postId, userId],
     );
     const io = req.app && req.app.get && req.app.get("io");
 
     if (existing.rows.length > 0) {
       await pool.query(
         "DELETE FROM post_likes WHERE post_id = $1 AND user_id = $2",
-        [postId, userId]
+        [postId, userId],
       );
+      await pool.query(
+        `DELETE FROM notifications
+     WHERE type = 'like'
+     AND entity_id = $1
+     AND actor_id = $2`,
+        [postId, userId],
+      );
+      const pRes = await pool.query(
+        "SELECT user_id FROM posts WHERE id = $1 LIMIT 1",
+        [postId],
+      );
+      const postOwner = pRes.rows[0]?.user_id;
+
+      if (io && postOwner) {
+        io.to(postOwner).emit("notification:delete", {
+          entityId: postId,
+          type: "like",
+          actorId: userId,
+        });
+      }
     } else {
       await pool.query(
         "INSERT INTO post_likes (post_id, user_id) VALUES ($1, $2)",
-        [postId, userId]
+        [postId, userId],
       );
 
       // notify owner
       try {
         const pRes = await pool.query(
           "SELECT user_id FROM posts WHERE id = $1 LIMIT 1",
-          [postId]
+          [postId],
         );
         const postOwner = pRes.rows[0]?.user_id;
         if (postOwner && postOwner !== userId) {
+          // get actor name
+          const userRes = await pool.query(
+            "SELECT first_name, last_name FROM users WHERE id = $1",
+            [userId],
+          );
+
+          const actorName = `${userRes.rows[0].first_name} ${userRes.rows[0].last_name}`;
+
           await notify(io, {
             toUserId: postOwner,
             actorId: userId,
             type: "like",
             entityId: postId,
             entityType: "post",
-            data: { message: "liked your post" },
+            data: {
+              actorName,
+              message: "liked your post",
+              postId,
+            },
           });
         }
       } catch (err) {
@@ -1107,7 +1142,7 @@ router.patch("/:id/like", auth, async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT COUNT(*)::int AS like_count, BOOL_OR(user_id = $2) AS liked_by_me FROM post_likes WHERE post_id = $1`,
-      [postId, userId]
+      [postId, userId],
     );
 
     res.json(rows[0]);
@@ -1136,7 +1171,7 @@ router.get("/:id/likes", auth, async (req, res) => {
       ORDER BY pl.created_at DESC
       OFFSET $2::bigint LIMIT $3::bigint
       `,
-      [id, offset, pageSize]
+      [id, offset, pageSize],
     );
 
     const users = await Promise.all(
@@ -1147,14 +1182,14 @@ router.get("/:id/likes", auth, async (req, res) => {
         course: u.course,
         university: u.university,
         role: u.user_type,
-      }))
+      })),
     );
 
     res.json({ users });
   } catch (err) {
     console.error(
       "❌ Failed to fetch likes:",
-      err && err.stack ? err.stack : err
+      err && err.stack ? err.stack : err,
     );
     res.status(500).json({ error: "Failed to load likes" });
   }
@@ -1171,17 +1206,17 @@ router.post("/comments/:commentId/like", auth, async (req, res) => {
   try {
     const existing = await pool.query(
       "SELECT id FROM comment_likes WHERE comment_id=$1 AND user_id=$2",
-      [commentId, userId]
+      [commentId, userId],
     );
 
     if (existing.rows.length > 0) {
       await pool.query(
         "DELETE FROM comment_likes WHERE comment_id=$1 AND user_id=$2",
-        [commentId, userId]
+        [commentId, userId],
       );
       const countRes = await pool.query(
         "SELECT COUNT(*) FROM comment_likes WHERE comment_id=$1",
-        [commentId]
+        [commentId],
       );
       return res.json({
         liked: false,
@@ -1190,11 +1225,11 @@ router.post("/comments/:commentId/like", auth, async (req, res) => {
     } else {
       await pool.query(
         "INSERT INTO comment_likes (comment_id, user_id) VALUES ($1, $2)",
-        [commentId, userId]
+        [commentId, userId],
       );
       const countRes = await pool.query(
         "SELECT COUNT(*) FROM comment_likes WHERE comment_id=$1",
-        [commentId]
+        [commentId],
       );
       return res.json({
         liked: true,
@@ -1204,9 +1239,54 @@ router.post("/comments/:commentId/like", auth, async (req, res) => {
   } catch (err) {
     console.error(
       "❌ Failed to toggle comment like:",
-      err && err.stack ? err.stack : err
+      err && err.stack ? err.stack : err,
     );
     res.status(500).json({ error: "Failed to like comment" });
+  }
+});
+router.delete("/comments/:commentId", auth, async (req, res) => {
+  const { commentId } = req.params;
+  const userId = req.user.id;
+
+  try {
+    const comment = await pool.query(`SELECT * FROM comments WHERE id = $1`, [
+      commentId,
+    ]);
+
+    if (!comment.rows.length) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    if (comment.rows[0].user_id !== userId) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    // delete comment
+    await pool.query(`DELETE FROM comments WHERE id = $1`, [commentId]);
+
+    // ✅ delete related notifications
+    await pool.query(
+      `DELETE FROM notifications
+       WHERE type = 'comment'
+       AND entity_id = $1`,
+      [commentId],
+    );
+    const postRes = await pool.query(
+      "SELECT user_id FROM posts WHERE id = $1",
+      [comment.rows[0].post_id],
+    );
+
+    const postOwner = postRes.rows[0]?.user_id;
+
+    if (io && postOwner) {
+      io.to(postOwner).emit("notification:delete", {
+        entityId: commentId,
+        type: "comment",
+      });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed" });
   }
 });
 
@@ -1220,19 +1300,19 @@ router.post("/:postId/save", auth, async (req, res) => {
   try {
     const existing = await pool.query(
       `SELECT id FROM saved_posts WHERE user_id = $1 AND post_id = $2`,
-      [userId, postId]
+      [userId, postId],
     );
 
     if (existing.rows.length > 0) {
       await pool.query(
         `DELETE FROM saved_posts WHERE user_id = $1 AND post_id = $2`,
-        [userId, postId]
+        [userId, postId],
       );
       return res.json({ saved: false });
     } else {
       await pool.query(
         `INSERT INTO saved_posts (user_id, post_id) VALUES ($1, $2)`,
-        [userId, postId]
+        [userId, postId],
       );
       return res.json({ saved: true });
     }
