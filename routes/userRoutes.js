@@ -59,7 +59,7 @@ router.get("/me", auth, async (req, res) => {
          created_at
        FROM users
        WHERE id = $1`,
-      [req.user.id]
+      [req.user.id],
     );
 
     if (!rows.length) {
@@ -92,7 +92,7 @@ router.post(
       const key = await uploadToS3(
         req.file.buffer,
         req.file.originalname,
-        req.file.mimetype
+        req.file.mimetype,
       );
 
       await pool.query("UPDATE users SET profile = $1 WHERE id = $2", [
@@ -105,7 +105,7 @@ router.post(
       console.error(err);
       res.status(500).json({ error: "Upload failed" });
     }
-  }
+  },
 );
 
 // GET /api/users/profile-url?key=...
@@ -132,7 +132,7 @@ router.patch("/about", auth, async (req, res) => {
       return res.status(404).json({ error: "only less than 150 characters" });
     const { rows } = await pool.query(
       "UPDATE users SET about = $1 WHERE id = $2 RETURNING id, about",
-      [about || null, req.user.id]
+      [about || null, req.user.id],
     );
     if (!rows.length) return res.status(404).json({ error: "User not found" });
     return res.json(rows[0]);
@@ -155,7 +155,7 @@ router.patch("/experience", auth, async (req, res) => {
     // Update JSONB field
     const updatedUser = await pool.query(
       "UPDATE users SET experience = $1 WHERE id = $2 RETURNING experience",
-      [JSON.stringify(newExperienceArray), userId]
+      [JSON.stringify(newExperienceArray), userId],
     );
 
     res.json({ experience: updatedUser.rows[0].experience });
@@ -176,7 +176,7 @@ router.patch("/education", auth, async (req, res) => {
     // Update JSONB field
     const updatedUser = await pool.query(
       "UPDATE users SET education = $1 WHERE id = $2 RETURNING education",
-      [JSON.stringify(newEducationArray), userId]
+      [JSON.stringify(newEducationArray), userId],
     );
 
     res.json({ education: updatedUser.rows[0].education });
@@ -197,7 +197,7 @@ router.patch("/projects", auth, async (req, res) => {
     // Update JSONB field
     const updatedUser = await pool.query(
       "UPDATE users SET projects = $1 WHERE id = $2 RETURNING projects",
-      [JSON.stringify(newProjectsArray), userId]
+      [JSON.stringify(newProjectsArray), userId],
     );
 
     res.json({ projects: updatedUser.rows[0].projects });
@@ -225,7 +225,7 @@ router.patch("/skills", auth, async (req, res) => {
     // Update text[] column
     const { rows } = await pool.query(
       "UPDATE users SET skills = $1 WHERE id = $2 RETURNING skills",
-      [cleaned, req.user.id] // pg will coerce JS array -> text[]
+      [cleaned, req.user.id], // pg will coerce JS array -> text[]
     );
 
     res.json({ skills: rows[0].skills });
@@ -253,7 +253,7 @@ router.patch("/interests", auth, async (req, res) => {
     // Update text[] column
     const { rows } = await pool.query(
       "UPDATE users SET interests = $1 WHERE id = $2 RETURNING interests",
-      [cleaned, req.user.id] // pg will coerce JS array -> text[]
+      [cleaned, req.user.id], // pg will coerce JS array -> text[]
     );
 
     res.json({ interests: rows[0].interests });
@@ -262,7 +262,6 @@ router.patch("/interests", auth, async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-
 
 // GET saved posts (GRID VIEW ONLY)
 router.get("/saved-posts", auth, async (req, res) => {
@@ -310,7 +309,7 @@ router.get("/saved-posts", auth, async (req, res) => {
         image_url: post.image_url
           ? await generatePresignedUrl(post.image_url)
           : null,
-      }))
+      })),
     );
 
     res.json({ posts });
@@ -319,7 +318,6 @@ router.get("/saved-posts", auth, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch saved posts" });
   }
 });
-
 
 // ✅ Get all posts of a user with pagination
 router.get("/activity", auth, async (req, res) => {
@@ -336,7 +334,7 @@ router.get("/activity", auth, async (req, res) => {
        WHERE p.user_id = $1
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
-      [userId, limit, offset]
+      [userId, limit, offset],
     );
 
     const posts = await Promise.all(
@@ -348,7 +346,7 @@ router.get("/activity", auth, async (req, res) => {
         image_url: post.image_url
           ? await generatePresignedUrl(post.image_url)
           : null,
-      }))
+      })),
     );
 
     res.json(posts);
@@ -360,6 +358,7 @@ router.get("/activity", auth, async (req, res) => {
 
 router.delete("/delete/:id", auth, async (req, res) => {
   const userId = req.user.id; // ✅ from token
+  const io = req.app.get("io");
   const { id: postId } = req.params; // ✅ from route
 
   try {
@@ -377,6 +376,22 @@ router.delete("/delete/:id", auth, async (req, res) => {
         .status(403)
         .json({ error: "Not authorized to delete this post" });
     }
+    // 1. delete notifications
+    await pool.query(
+      `
+  DELETE FROM notifications
+  WHERE 
+    (type = 'like' AND entity_id = $1)
+    OR
+    (type = 'comment' AND (data->>'postId')::uuid = $1)
+`,
+      [postId],
+    );
+    // emit ONLY to owner
+    io.to(userId).emit("notification:delete", {
+      type: "post",
+      postId,
+    });
 
     // Delete the post
     await pool.query("DELETE FROM posts WHERE id = $1 AND user_id = $2", [
@@ -430,7 +445,7 @@ router.get("/profile/:userId", auth, async (req, res) => {
          ) AS is_blocked_by_me
        FROM users u
        WHERE u.id = $1`,
-      [userId, viewerId]
+      [userId, viewerId],
     );
 
     if (!rows.length) {
@@ -449,8 +464,5 @@ router.get("/profile/:userId", auth, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-
-
-
 
 module.exports = router;
