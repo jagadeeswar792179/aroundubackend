@@ -6,16 +6,12 @@ const s3 = new AWS.S3({
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   region: process.env.AWS_REGION,
 });
+const CDN_URL = process.env.CLOUDFRONT_URL;
 
-// Generate a temporary download link for private image
 const generatePresignedUrl = (key) => {
-  const params = {
-    Bucket: process.env.S3_BUCKET_NAME,
-    Key: key,
-    Expires: 3600, // 1 hour expiry
-  };
+  if (!key) return null;
 
-  return s3.getSignedUrl("getObject", params);
+  return `${CDN_URL}/${key}`;
 };
 
 module.exports = generatePresignedUrl;

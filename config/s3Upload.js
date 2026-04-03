@@ -11,12 +11,12 @@ const s3 = new AWS.S3({
 // Uploads the file and returns the S3 object key (not public URL)
 const uploadToS3 = async (fileBuffer, fileName, mimeType) => {
   const key = `${uuidv4()}-${fileName}`;
-
   const uploadParams = {
     Bucket: process.env.S3_BUCKET_NAME,
     Key: key,
     Body: fileBuffer,
     ContentType: mimeType,
+    CacheControl: "public, max-age=31536000, immutable", // 🔥 ADD THIS
   };
 
   await s3.upload(uploadParams).promise();
