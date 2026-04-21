@@ -56,7 +56,7 @@ SELECT DISTINCT ON (mc.id)
   mc.id AS conversation_id,
   mc.type,
   mc.title,
-
+  mc.last_message_id,
   p.peer_id,
   p.first_name,
   p.last_name,
@@ -354,7 +354,17 @@ LIMIT 50;
        WHERE id = $1`,
           [messageId, me],
         );
-
+        // after delete
+        const members = await pool.query(
+          `SELECT user_id FROM conversation_members WHERE conversation_id=$1`,
+          [conversation_id],
+        );
+        members.rows.forEach(({ user_id }) => {
+          io.to(user_id).emit("message:deleted", {
+            messageId,
+            conversation_id,
+          });
+        });
         res.json({ success: true });
       } catch (e) {
         res.status(500).json({ msg: "deleteMessage failed", error: e.message });
@@ -365,12 +375,28 @@ LIMIT 50;
       try {
         const me = req.user.id;
         const { conversationId } = req.params;
+
         await pool.query(
           `UPDATE messages
-           SET seen = true
-           WHERE conversation_id=$1 AND sender_id <> $2 AND seen = false`,
+       SET seen = true
+       WHERE conversation_id=$1 AND sender_id <> $2 AND seen = false`,
           [conversationId, me],
         );
+
+        // 🔥 ADD THIS BLOCK
+        const members = await pool.query(
+          `SELECT user_id FROM conversation_members WHERE conversation_id=$1`,
+          [conversationId],
+        );
+
+        members.rows.forEach(({ user_id }) => {
+          if (user_id !== me) {
+            io.to(user_id).emit("message:seen", {
+              conversation_id: conversationId,
+            });
+          }
+        });
+
         res.json({ msg: "seen updated" });
       } catch (e) {
         res.status(500).json({ msg: "markSeen failed", error: e.message });
