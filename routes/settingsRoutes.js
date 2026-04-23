@@ -4,34 +4,25 @@ const pool = require("../config/db");
 const auth = require("../middlewares/authMiddleware");
 const bcrypt = require("bcrypt");
 
-
 // CHECK existing recovery email
 router.get("/recovery-email/check", auth, async (req, res) => {
-
   const userId = req.user.id;
 
   try {
-
     const result = await pool.query(
       "SELECT recovery_email FROM users WHERE id = $1",
-      [userId]
+      [userId],
     );
 
     res.json(result.rows[0] || { recovery_email: null });
-
   } catch (err) {
-
     console.error(err);
     res.status(500).json({ msg: "Server error" });
-
   }
-
 });
-
 
 // UPDATE recovery email
 router.put("/recovery-email", auth, async (req, res) => {
-
   const userId = req.user.id;
   const { recoveryEmail } = req.body;
 
@@ -40,24 +31,18 @@ router.put("/recovery-email", auth, async (req, res) => {
   }
 
   try {
-
-    await pool.query(
-      "UPDATE users SET recovery_email = $1 WHERE id = $2",
-      [recoveryEmail, userId]
-    );
+    await pool.query("UPDATE users SET recovery_email = $1 WHERE id = $2", [
+      recoveryEmail,
+      userId,
+    ]);
 
     res.json({ success: true });
-
   } catch (err) {
-
     console.error(err);
     res.status(500).json({ msg: "Server error" });
-
   }
-
 });
 router.put("/change-password", auth, async (req, res) => {
-
   const userId = req.user.id;
   const { oldPassword, newPassword } = req.body;
 
@@ -66,20 +51,15 @@ router.put("/change-password", auth, async (req, res) => {
   }
 
   try {
-
-    const user = await pool.query(
-      "SELECT password FROM users WHERE id=$1",
-      [userId]
-    );
+    const user = await pool.query("SELECT password FROM users WHERE id=$1", [
+      userId,
+    ]);
 
     if (!user.rows.length) {
       return res.status(404).json({ msg: "User not found" });
     }
 
-    const match = await bcrypt.compare(
-      oldPassword,
-      user.rows[0].password
-    );
+    const match = await bcrypt.compare(oldPassword, user.rows[0].password);
 
     if (!match) {
       return res.status(400).json({ msg: "Incorrect old password" });
@@ -87,67 +67,99 @@ router.put("/change-password", auth, async (req, res) => {
 
     const hashed = await bcrypt.hash(newPassword, 10);
 
-    await pool.query(
-      "UPDATE users SET password=$1 WHERE id=$2",
-      [hashed, userId]
-    );
+    await pool.query("UPDATE users SET password=$1 WHERE id=$2", [
+      hashed,
+      userId,
+    ]);
 
     res.json({ success: true });
-
   } catch (err) {
-
     console.error(err);
     res.status(500).json({ msg: "Server error" });
-
   }
-
 });
 
 // CHECK phone number
 router.get("/phone-number/check", auth, async (req, res) => {
-
   const userId = req.user.id;
 
   try {
-
     const result = await pool.query(
       "SELECT phone_number FROM users WHERE id=$1",
-      [userId]
+      [userId],
     );
 
     res.json(result.rows[0] || { phone_number: null });
-
   } catch (err) {
-
     console.error(err);
     res.status(500).json({ msg: "Server error" });
-
   }
-
 });
-
 
 // UPDATE phone number
 router.put("/phone-number", auth, async (req, res) => {
-
   const userId = req.user.id;
   const { phoneNumber } = req.body;
 
   try {
-
-    await pool.query(
-      "UPDATE users SET phone_number=$1 WHERE id=$2",
-      [phoneNumber, userId]
-    );
+    await pool.query("UPDATE users SET phone_number=$1 WHERE id=$2", [
+      phoneNumber,
+      userId,
+    ]);
 
     res.json({ success: true });
-
   } catch (err) {
-
     console.error(err);
     res.status(500).json({ msg: "Server error" });
+  }
+});
 
+router.delete("/delete-account", auth, async (req, res) => {
+  const userId = req.user.id;
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ msg: "Password required" });
   }
 
+  try {
+    await pool.query("BEGIN");
+
+    const user = await pool.query("SELECT password FROM users WHERE id=$1", [
+      userId,
+    ]);
+
+    if (!user.rows.length) {
+      throw new Error("User not found");
+    }
+
+    const match = await bcrypt.compare(password, user.rows[0].password);
+
+    if (!match) {
+      throw new Error("Incorrect password");
+    }
+
+    // 🔥 OPTIONAL manual deletes (only if you want FULL wipe)
+    await pool.query("DELETE FROM claims WHERE claimed_person_id = $1", [
+      userId,
+    ]);
+
+    await pool.query("DELETE FROM lost_and_found WHERE reported_by = $1", [
+      userId,
+    ]);
+
+    // ✅ MAIN DELETE (this triggers cascade)
+    await pool.query("DELETE FROM users WHERE id=$1", [userId]);
+
+    await pool.query("COMMIT");
+
+    res.json({ success: true });
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error(err);
+    res.status(400).json({ msg: err.message });
+  } finally {
+    pool.release();
+  }
 });
 module.exports = router;

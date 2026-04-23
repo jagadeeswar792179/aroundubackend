@@ -35,7 +35,7 @@ router.get("/professors", auth, async (req, res) => {
     // fetch current user's university (safe access)
     const uRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
-      [meId]
+      [meId],
     );
     const myUniversity =
       typeof uRes.rows?.[0]?.university === "string"
@@ -149,7 +149,7 @@ router.get("/professors", auth, async (req, res) => {
     const countRes = await pool.query(countQuery, countParams);
     const totalMatching = Math.min(
       Number(countRes.rows?.[0]?.cnt || 0),
-      MAX_TOTAL
+      MAX_TOTAL,
     );
 
     const dataRes = await pool.query(dataQuery, dataParams);
@@ -166,18 +166,18 @@ router.get("/professors", auth, async (req, res) => {
           console.warn(
             "explore/professors: presign failed for key",
             r.profile_key,
-            err?.message || err
+            err?.message || err,
           );
           return null;
         }
-      })
+      }),
     );
 
     const professors = rows.map((r, idx) => ({
       id: r.id,
       first_name: r.first_name,
       last_name: r.last_name,
-      avatar_url: presigned[idx] || null,
+      profile: presigned[idx] || null,
       university: r.university,
       specialization: r.specialization,
       about: r.about,
@@ -192,7 +192,7 @@ router.get("/professors", auth, async (req, res) => {
       "explore/professors: page",
       page,
       "fetchedIds:",
-      professors.map((p) => p.id)
+      professors.map((p) => p.id),
     );
 
     return res.json({ professors, hasMore, totalMatching });
@@ -222,7 +222,7 @@ router.get("/people", auth, async (req, res) => {
     // fetch current user's university (text) and normalize
     const uRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
-      [meId]
+      [meId],
     );
     const rawUniv = uRes.rows?.[0]?.university;
     const myUniversity =
@@ -344,7 +344,7 @@ router.get("/people", auth, async (req, res) => {
     const countRes = await pool.query(countSql, countParams);
     const totalMatching = Math.min(
       Number(countRes.rows?.[0]?.cnt || 0),
-      MAX_TOTAL
+      MAX_TOTAL,
     );
     if (totalMatching === 0)
       return res.json({ people: [], hasMore: false, totalMatching: 0 });
@@ -364,18 +364,18 @@ router.get("/people", auth, async (req, res) => {
           console.warn(
             "explore/people: presign failed for key",
             r.profile_key,
-            err?.message || err
+            err?.message || err,
           );
           return null;
         }
-      })
+      }),
     );
 
     const people = rows.map((r, idx) => ({
       id: r.id,
       first_name: r.first_name,
       last_name: r.last_name,
-      avatar_url: presigned[idx] || null,
+      profile: presigned[idx] || null,
       university: r.university,
       specialization: r.specialization,
       about: r.about,
@@ -411,7 +411,7 @@ router.get("/clubs", auth, async (req, res) => {
 
     const uRes = await pool.query(
       "SELECT university FROM users WHERE id = $1 LIMIT 1",
-      [meId]
+      [meId],
     );
 
     const myUniversity =
@@ -433,15 +433,26 @@ router.get("/clubs", auth, async (req, res) => {
       `;
 
       params = [myUniversity, offset, limit];
-    } else {
+    } else if (!sameUniversity && myUniversity) {
+      // 🔥 OTHER universities (FIX)
       sql = `
-        SELECT id, first_name, last_name, profile AS profile_key, university
-        FROM users
-        WHERE user_type = 'club'
-        ORDER BY created_at DESC
-        OFFSET $1 LIMIT $2
-      `;
-
+    SELECT id, first_name, last_name, profile AS profile_key, university
+    FROM users
+    WHERE user_type = 'club'
+      AND (university IS NULL OR university <> $1)
+    ORDER BY created_at DESC
+    OFFSET $2 LIMIT $3
+  `;
+      params = [myUniversity, offset, limit];
+    } else {
+      // user has no university → show all
+      sql = `
+    SELECT id, first_name, last_name, profile AS profile_key, university
+    FROM users
+    WHERE user_type = 'club'
+    ORDER BY created_at DESC
+    OFFSET $1 LIMIT $2
+  `;
       params = [offset, limit];
     }
 
@@ -457,14 +468,14 @@ router.get("/clubs", auth, async (req, res) => {
         } catch {
           return null;
         }
-      })
+      }),
     );
 
     const clubs = rows.map((r, idx) => ({
       id: r.id,
       first_name: r.first_name,
       last_name: r.last_name,
-      avatar_url: presigned[idx],
+      profile: presigned[idx],
       university: r.university,
     }));
 
@@ -472,7 +483,6 @@ router.get("/clubs", auth, async (req, res) => {
       clubs,
       hasMore: clubs.length === PAGE_SIZE,
     });
-
   } catch (err) {
     console.error("❌ explore/clubs error:", err);
     res.status(500).json({ error: "Failed to fetch clubs" });
