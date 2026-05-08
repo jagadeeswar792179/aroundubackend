@@ -216,6 +216,133 @@ router.post("/discussion", auth, async (req, res) => {
 });
 
 /**
+ * FEED: /feed/clubs
+ * Returns posts created by club accounts
+ */
+router.get("/feed/clubs", auth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page || "1", 10);
+    const pageSize = 10;
+    const offset = (page - 1) * pageSize;
+    const currentUserId = req.user.id;
+
+    // requester university
+    const meRes = await pool.query(
+      "SELECT university FROM users WHERE id = $1 LIMIT 1",
+      [currentUserId],
+    );
+
+    const requesterUniversity = meRes.rows[0]?.university || null;
+
+    const params = [offset, pageSize, currentUserId];
+
+    let visibilityClause = `posts.visibility = 'public'`;
+
+    if (requesterUniversity) {
+      params.push(requesterUniversity);
+
+      visibilityClause = `
+        (
+          posts.visibility = 'public'
+          OR
+          (
+            posts.visibility = 'university'
+            AND users.university = $4
+          )
+        )
+      `;
+    }
+
+    const sql = `
+      SELECT
+        posts.*,
+        users.first_name,
+        users.last_name,
+        users.profile,
+        users.course,
+        users.university,
+        users.user_type,
+
+        (SELECT status FROM follow_requests
+          WHERE requester_id = $3
+          AND target_id = posts.user_id
+          LIMIT 1) AS my_follow_status,
+
+        (SELECT status FROM follow_requests
+          WHERE requester_id = posts.user_id
+          AND target_id = $3
+          LIMIT 1) AS incoming_follow_status,
+
+        COUNT(DISTINCT pl.id) AS like_count,
+        BOOL_OR(pl.user_id = $3) AS liked_by_me,
+        BOOL_OR(sp.user_id = $3) AS saved_by_me,
+
+        COALESCE(
+          ARRAY_AGG(DISTINCT u2.first_name || ' ' || u2.last_name)
+          FILTER (WHERE pl.user_id IS NOT NULL),
+          '{}'
+        ) AS liked_users,
+
+        COUNT(DISTINCT c.id) AS comment_count
+
+      FROM posts
+
+      JOIN users
+        ON posts.user_id = users.id
+
+      LEFT JOIN post_likes pl
+        ON posts.id = pl.post_id
+
+      LEFT JOIN users u2
+        ON pl.user_id = u2.id
+
+      LEFT JOIN comments c
+        ON posts.id = c.post_id
+
+      LEFT JOIN saved_posts sp
+        ON posts.id = sp.post_id
+
+      WHERE users.user_type = 'club'
+
+        AND (${visibilityClause})
+
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE b.blocker_id = $3
+          AND b.blocked_id = posts.user_id
+        )
+
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b2
+          WHERE b2.blocker_id = posts.user_id
+          AND b2.blocked_id = $3
+        )
+
+      GROUP BY posts.id, users.id
+
+      ORDER BY posts.created_at DESC
+
+      OFFSET $1::bigint
+      LIMIT $2::bigint;
+    `;
+
+    const result = await pool.query(sql, params);
+
+    const posts = await mapPosts(result.rows, currentUserId);
+
+    res.json({ posts });
+  } catch (err) {
+    console.error(
+      "❌ Failed to fetch clubs feed:",
+      err && err.stack ? err.stack : err,
+    );
+
+    res.status(500).json({
+      error: "Failed to load club posts",
+    });
+  }
+});
+/**
  * Helper: mapRows -> normalized posts with presigned URLs
  * Expects rows as returned by SQL queries selecting posts.* plus user fields
  */
