@@ -316,9 +316,9 @@ LIMIT 50;
 
         // get message info
         const msg = await pool.query(
-          `SELECT sender_id, conversation_id
-       FROM messages
-       WHERE id=$1`,
+          `SELECT sender_id, conversation_id, created_at
+   FROM messages
+   WHERE id=$1`,
           [messageId],
         );
 
@@ -327,6 +327,10 @@ LIMIT 50;
         }
 
         const { sender_id, conversation_id } = msg.rows[0];
+        const createdAt = new Date(msg.rows[0].created_at);
+        const now = new Date();
+
+        const diffHours = (now - createdAt) / (1000 * 60 * 60);
 
         // check if user is admin in group
         const role = await pool.query(
@@ -339,11 +343,17 @@ LIMIT 50;
 
         const userRole = role.rows[0]?.role;
 
-        // allow if sender OR admin
         if (sender_id !== me && userRole !== "admin") {
           return res
             .status(403)
             .json({ msg: "Not allowed to delete this message" });
+        }
+
+        // sender can only delete within 24 hours
+        if (sender_id === me && diffHours > 24) {
+          return res.status(403).json({
+            msg: "Messages can only be deleted within 24 hours",
+          });
         }
 
         // soft delete message

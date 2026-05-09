@@ -82,17 +82,17 @@ router.get("/week", auth, async (req, res) => {
     if (ids.length > 0) {
       const pc = await db.query(
         `SELECT slot_instance_id, COUNT(*)::int as cnt FROM booking_requests WHERE slot_instance_id = ANY($1) AND status = 'pending' GROUP BY slot_instance_id`,
-        [ids]
+        [ids],
       );
       pc.rows.forEach(
-        (r) => (pendingCounts[r.slot_instance_id] = Number(r.cnt))
+        (r) => (pendingCounts[r.slot_instance_id] = Number(r.cnt)),
       );
       const ac = await db.query(
         `SELECT slot_instance_id, COUNT(*)::int as cnt FROM bookings WHERE slot_instance_id = ANY($1) GROUP BY slot_instance_id`,
-        [ids]
+        [ids],
       );
       ac.rows.forEach(
-        (r) => (acceptedCounts[r.slot_instance_id] = Number(r.cnt))
+        (r) => (acceptedCounts[r.slot_instance_id] = Number(r.cnt)),
       );
     }
 
@@ -188,6 +188,9 @@ router.get("/slot-instances", auth, async (req, res) => {
       created_by: r.created_by,
       owner_id: r.owner_id,
       pending_count: parseInt(r.pending_count, 10) || 0,
+
+      price: Number(r.price || 0),
+      currency: r.currency || "INR",
     }));
 
     return res.json({ instances: mapped });
@@ -229,7 +232,7 @@ router.get("/requests", auth, async (req, res) => {
     if (search) {
       params.push(`%${search}%`);
       whereClauses.push(
-        `(u.first_name ILIKE $${params.length} OR u.last_name ILIKE $${params.length} OR u.university ILIKE $${params.length} OR u.course ILIKE $${params.length})`
+        `(u.first_name ILIKE $${params.length} OR u.last_name ILIKE $${params.length} OR u.university ILIKE $${params.length} OR u.course ILIKE $${params.length})`,
       );
     }
 
@@ -282,7 +285,7 @@ router.get("/requests", auth, async (req, res) => {
           console.warn(
             "generatePresignedUrl failed for",
             r.profile_key,
-            err && err.message
+            err && err.message,
           );
           presigned = null;
         }
@@ -302,7 +305,7 @@ router.get("/requests", auth, async (req, res) => {
           slot_start: r.start_ts,
           slot_end: r.end_ts,
         };
-      })
+      }),
     );
 
     const total = rows.length ? parseInt(rows[0].total_count, 10) : 0;
@@ -360,7 +363,7 @@ router.post(
           " end='",
           r.end_ts,
           "' ->",
-          e
+          e,
         );
 
         if (isNaN(s.getTime()) || isNaN(e.getTime())) {
@@ -381,7 +384,7 @@ router.post(
         console.log(
           `Range #${
             idx + 1
-          } local dates: sDate=${sDate}, eDate=${eDate}, provided date=${date}`
+          } local dates: sDate=${sDate}, eDate=${eDate}, provided date=${date}`,
         );
         if (sDate !== date || eDate !== date) {
           return res.status(400).json({
@@ -397,6 +400,8 @@ router.post(
           capacity: r.capacity || 0,
           notes: r.notes || null,
           slot_id: r.slot_id || null,
+          price: Number(r.price || 0),
+          currency: r.currency || "INR",
         });
       }
 
@@ -418,7 +423,7 @@ router.post(
             WHERE si.date = $1::date
               AND (COALESCE(si.created_by, s.professor_id) = $2)
           `,
-            [date, professorId]
+            [date, professorId],
           );
 
           const existing = existingRes.rows.map((r) => ({
@@ -457,8 +462,19 @@ router.post(
           const inserted = [];
           for (const r of normalizedRanges) {
             const insertRes = await client.query(
-              `INSERT INTO slot_instances (slot_id, date, start_ts, end_ts, capacity, notes, created_by)
-               VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+              `INSERT INTO slot_instances (
+  slot_id,
+  date,
+  start_ts,
+  end_ts,
+  capacity,
+  notes,
+  created_by,
+  price,
+  currency
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+RETURNING *`,
               [
                 r.slot_id,
                 date,
@@ -467,7 +483,9 @@ router.post(
                 r.capacity,
                 r.notes,
                 professorId,
-              ]
+                r.price,
+                r.currency,
+              ],
             );
             inserted.push(insertRes.rows[0]);
           }
@@ -497,7 +515,7 @@ router.post(
             WHERE si.date = $1::date
               AND (COALESCE(si.created_by, s.professor_id) = $2)
           `,
-            [date, professorId]
+            [date, professorId],
           );
 
           const existing = existingRes.rows.map((r) => ({
@@ -536,8 +554,19 @@ router.post(
           const inserted = [];
           for (const r of normalizedRanges) {
             const insertRes = await db.query(
-              `INSERT INTO slot_instances (slot_id, date, start_ts, end_ts, capacity, notes, created_by)
-               VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+              `INSERT INTO slot_instances (
+  slot_id,
+  date,
+  start_ts,
+  end_ts,
+  capacity,
+  notes,
+  created_by,
+  price,
+  currency
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+RETURNING *`,
               [
                 r.slot_id,
                 date,
@@ -546,7 +575,9 @@ router.post(
                 r.capacity,
                 r.notes,
                 professorId,
-              ]
+                r.price,
+                r.currency,
+              ],
             );
             inserted.push(insertRes.rows[0]);
           }
@@ -565,7 +596,7 @@ router.post(
     } catch (err) {
       console.error(
         "POST /slot-instances/batch error (handler):",
-        err && err.stack ? err.stack : err
+        err && err.stack ? err.stack : err,
       );
 
       if (isDev) {
@@ -573,7 +604,7 @@ router.post(
       }
       return res.status(500).json({ error: "Failed to create slot instances" });
     }
-  }
+  },
 );
 
 /* ----------------------------
@@ -601,7 +632,7 @@ router.post("/slots", auth, requireProfessor, async (req, res) => {
 
     const { rows } = await db.query(
       `INSERT INTO slots (professor_id, weekday, start_time, end_time, capacity, notes) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [professorId, weekday, start_time, end_time, capacity, notes]
+      [professorId, weekday, start_time, end_time, capacity, notes],
     );
     res.status(201).json({ slot: rows[0] });
   } catch (err) {
@@ -625,7 +656,7 @@ router.post("/slot-instances/:id/request", auth, async (req, res) => {
     // check instance exists
     const inst = await db.query(
       "SELECT id, COALESCE(created_by, (SELECT professor_id FROM slots WHERE id = si.slot_id)) AS owner FROM slot_instances si WHERE id = $1",
-      [instanceId]
+      [instanceId],
     );
     if (inst.rows.length === 0)
       return res.status(404).json({ error: "Slot instance not found" });
@@ -641,14 +672,14 @@ router.post("/slot-instances/:id/request", auth, async (req, res) => {
     // prevent duplicates
     const exists = await db.query(
       "SELECT id FROM booking_requests WHERE slot_instance_id = $1 AND requester_id = $2",
-      [instanceId, req.user.id]
+      [instanceId, req.user.id],
     );
     if (exists.rows.length > 0)
       return res.status(409).json({ error: "You already requested this slot" });
 
     const { rows } = await db.query(
       "INSERT INTO booking_requests (slot_instance_id, requester_id, requester_message) VALUES ($1,$2,$3) RETURNING *",
-      [instanceId, req.user.id, message]
+      [instanceId, req.user.id, message],
     );
     res.status(201).json({ request: rows[0] });
   } catch (err) {
@@ -687,7 +718,7 @@ router.post(
        FROM booking_requests
        WHERE id = $1
        FOR UPDATE`,
-        [requestId]
+        [requestId],
       );
 
       if (reqRowRes.rows.length === 0) {
@@ -713,7 +744,7 @@ router.post(
        FROM slot_instances
        WHERE id = $1
        FOR UPDATE`,
-        [br.slot_instance_id]
+        [br.slot_instance_id],
       );
 
       if (siRes.rows.length === 0) {
@@ -731,7 +762,7 @@ router.post(
          FROM slots
          WHERE id = $1
          FOR UPDATE`,
-          [si.slot_id]
+          [si.slot_id],
         );
         if (slotRes.rows.length > 0) {
           slot = slotRes.rows[0];
@@ -745,8 +776,8 @@ router.post(
       const ownerProfessorId = slot
         ? String(slot.professor_id)
         : si.created_by
-        ? String(si.created_by)
-        : null;
+          ? String(si.created_by)
+          : null;
 
       if (!ownerProfessorId) {
         await client.query("ROLLBACK");
@@ -777,7 +808,7 @@ router.post(
       if (capacity > 0) {
         const cntRes = await client.query(
           `SELECT COUNT(*)::int AS cnt FROM bookings WHERE slot_instance_id = $1`,
-          [si.id]
+          [si.id],
         );
         const cnt = parseInt(cntRes.rows[0].cnt, 10);
         if (cnt >= capacity) {
@@ -789,7 +820,7 @@ router.post(
       // 6) Ensure requester exists to avoid FK errors
       const requesterCheck = await client.query(
         `SELECT id FROM users WHERE id = $1`,
-        [br.requester_id]
+        [br.requester_id],
       );
       if (requesterCheck.rows.length === 0) {
         await client.query("ROLLBACK");
@@ -799,12 +830,12 @@ router.post(
       // 7) Create booking and mark request accepted
       const bookingRes = await client.query(
         `INSERT INTO bookings (slot_instance_id, request_id, user_id) VALUES ($1, $2, $3) RETURNING *`,
-        [si.id, br.id, br.requester_id]
+        [si.id, br.id, br.requester_id],
       );
 
       await client.query(
         `UPDATE booking_requests SET status = 'accepted', updated_at = now() WHERE id = $1`,
-        [br.id]
+        [br.id],
       );
 
       await client.query("COMMIT");
@@ -845,7 +876,7 @@ router.post(
         // ignore
       }
     }
-  }
+  },
 );
 
 /* ----------------------------
@@ -869,7 +900,7 @@ router.post(
       JOIN slots s ON si.slot_id = s.id
       WHERE br.id = $1
     `,
-        [requestId]
+        [requestId],
       );
       if (r.rows.length === 0)
         return res.status(404).json({ error: "Request not found" });
@@ -880,14 +911,14 @@ router.post(
 
       await db.query(
         `UPDATE booking_requests SET status = 'rejected', updated_at = now() WHERE id = $1`,
-        [requestId]
+        [requestId],
       );
       res.json({ msg: "Request rejected" });
     } catch (err) {
       console.error("POST /requests/:id/reject error", err);
       res.status(500).json({ error: "Failed to reject request" });
     }
-  }
+  },
 );
 
 /* ----------------------------
@@ -911,7 +942,7 @@ router.delete(
       LEFT JOIN slots s ON si.slot_id = s.id
       WHERE si.id = $1
     `,
-        [id]
+        [id],
       );
 
       if (r.rows.length === 0)
@@ -927,7 +958,63 @@ router.delete(
       console.error("DELETE /slot-instances/:id error", err);
       res.status(500).json({ error: "Failed to delete instance" });
     }
-  }
+  },
 );
+// GET previous slots with requests by date
+// previous slots for selected date
+router.get("/previous-slots", auth, async (req, res) => {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({
+        error: "Not authenticated",
+      });
+    }
 
+    const userId = req.user.id;
+    const date = req.query.date;
+
+    if (!date) {
+      return res.status(400).json({
+        error: "date required",
+      });
+    }
+
+    const sql = `
+      SELECT
+        si.id,
+        si.start_ts,
+        si.end_ts,
+        si.notes,
+
+        COUNT(br.id)::int AS pending_count
+
+      FROM slot_instances si
+
+      LEFT JOIN slots s
+        ON si.slot_id = s.id
+
+      LEFT JOIN booking_requests br
+        ON br.slot_instance_id = si.id
+
+      WHERE si.date = $1
+      AND COALESCE(si.created_by, s.professor_id) = $2
+
+      GROUP BY si.id
+
+      ORDER BY si.start_ts ASC
+    `;
+
+    const { rows } = await db.query(sql, [date, userId]);
+
+    return res.json({
+      instances: rows,
+    });
+  } catch (err) {
+    console.error(err);
+
+    return res.status(500).json({
+      error: "Failed to fetch previous slots",
+    });
+  }
+});
 module.exports = router;
